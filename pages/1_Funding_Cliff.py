@@ -6,7 +6,7 @@ from datetime import date
 today = date.today()
 st.title("NIH Funding Dashboard")
 
-con = duckdb.connect("/Users/andrewmedlyn/Projects/nih-awards/nih_awards_slim.duckdb")
+con = duckdb.connect("nih_awards_slim.duckdb")
 df = con.execute("""
     SELECT fiscal_year, SUM(award_amount) / 1e9 AS obligations_billions
     FROM nih_awards_national

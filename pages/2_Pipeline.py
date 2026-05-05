@@ -10,7 +10,7 @@ st.caption("Comparing new award activity vs. non-competing continuations, FY2014
 "Note the steep drop in New Awards compared to a baseline of FY2024 - the last full year before the new administration.")
 #context drop in the matrix. 
 
-con = duckdb.connect("/Users/andrewmedlyn/Projects/nih-awards/nih_awards_slim.duckdb")
+con = duckdb.connect("nih_awards_slim.duckdb")
 df = con.execute("""
  SELECT 
     fiscal_year, 

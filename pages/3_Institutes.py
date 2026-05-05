@@ -9,7 +9,7 @@ today = date.today()
 st.header("NIH Institute Funding Changes")
 st.caption("Comparing FY2024 vs FY2025 funding by institute. Sorted by proportional loss.")
 
-con = duckdb.connect("/Users/andrewmedlyn/Projects/nih-awards/nih_awards_slim.duckdb")
+con = duckdb.connect("nih_awards_slim.duckdb")
 df = con.execute("""
 SELECT
     fiscal_year,

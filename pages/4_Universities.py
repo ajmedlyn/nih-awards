@@ -10,7 +10,7 @@ st.header("Research Institution Funding Loss")
 st.caption("Comparing FY2024 vs FY2025 funding by Research Institutes who had at least $25 million in NIH funding in FY2024. " \
 "Sorted by proportional loss.")
 
-con = duckdb.connect("/Users/andrewmedlyn/Projects/nih-awards/nih_awards_slim.duckdb")
+con = duckdb.connect("nih_awards_slim.duckdb")
 df = con.execute("""
 SELECT
     fiscal_year,
