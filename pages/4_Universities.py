@@ -35,16 +35,13 @@ annual = (
       .sum()
       .rename(columns={"monthly_funding": "total_dollars"})
 )
+annual["total_dollars"] = annual["total_dollars"] / 1e9  # work in $B
 
 fy2024 = annual[annual["fiscal_year"] == 2024].set_index("InstitutionName")["total_dollars"]
 fy2025 = annual[annual["fiscal_year"] == 2025].set_index("InstitutionName")["total_dollars"]
 
 compare = pd.DataFrame({"FY2024": fy2024, "FY2025": fy2025}).dropna()
-compare = compare[compare["FY2024"] >= 0.025]
-
-# Filter out obvious corporate/non-research entities
-corporate_patterns = r',?\s*(Inc\.?|LLC|L\.L\.C|Corp\.?|Corporation|Holdings|Co\.)(\s|$)'
-compare = compare[~compare.index.str.contains(corporate_patterns, case=False, regex=True, na=False)]
+compare = compare[compare["FY2024"] >= 0.025]  # at least $25M in FY2024
 
 compare["pct_change"] = (compare["FY2025"] - compare["FY2024"]) / compare["FY2024"] * 100
 compare["dollar_loss"] = compare["FY2025"] - compare["FY2024"]

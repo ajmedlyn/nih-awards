@@ -43,6 +43,7 @@ annual = (
       .sum()
       .rename(columns={"monthly_funding": "total_dollars"})
 )
+annual["total_dollars"] = annual["total_dollars"] / 1e9  # work in $B
 
 fy2024 = annual[annual["fiscal_year"] == 2024].set_index("ic")["total_dollars"]
 fy2025 = annual[annual["fiscal_year"] == 2025].set_index("ic")["total_dollars"]
