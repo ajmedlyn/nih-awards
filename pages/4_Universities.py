@@ -7,8 +7,8 @@ from datetime import date
 
 today = date.today()
 st.header("Research Institution Funding Loss")
-st.caption("Comparing FY2024 vs FY2025 funding by Research Institutes who had at least $25 million in NIH funding in FY2024. " \
-"Sorted by proportional loss.")
+st.caption("Comparing FY2024 vs FY2025 funding by research institution. "
+           "Top 20 by dollar loss, among institutions with at least $25M in FY2024 NIH funding.")
 
 con = duckdb.connect("nih_awards_slim.duckdb")
 df = con.execute("""
@@ -41,39 +41,79 @@ fy2025 = annual[annual["fiscal_year"] == 2025].set_index("InstitutionName")["tot
 
 compare = pd.DataFrame({"FY2024": fy2024, "FY2025": fy2025}).dropna()
 compare = compare[compare["FY2024"] >= 0.025]
+
+# Filter out obvious corporate/non-research entities
+corporate_patterns = r',?\s*(Inc\.?|LLC|L\.L\.C|Corp\.?|Corporation|Holdings|Co\.)(\s|$)'
+compare = compare[~compare.index.str.contains(corporate_patterns, case=False, regex=True, na=False)]
+
 compare["pct_change"] = (compare["FY2025"] - compare["FY2024"]) / compare["FY2024"] * 100
 compare["dollar_loss"] = compare["FY2025"] - compare["FY2024"]
 compare = compare.nsmallest(20, "dollar_loss").reset_index()
+compare["pct_change"] = compare["pct_change"].round(1)
 
-compare["pct_change"] = compare["pct_change"].round(3)
+n_rows = len(compare)
+chart_height = max(500, 42 * n_rows + 100)
+sorted_names = list(compare["InstitutionName"])
+
 fig = px.scatter(
     compare,
     x="pct_change",
     y="InstitutionName",
-    title="University Funding: FY2024 vs FY2025",
-    labels={"pct_change": "% Change", "InstitutionName": "University"},
+    title="University & Research Institute Funding: FY2024 vs FY2025",
+    labels={"pct_change": "% Change", "InstitutionName": "Institution"},
     color="pct_change",
     color_continuous_scale="RdYlGn",
-    range_color=[-30, 5]
+    range_color=[-30, 5],
+    custom_data=["InstitutionName", "FY2024", "FY2025", "dollar_loss"]
 )
 
+fig.update_traces(
+    marker=dict(size=9),
+    hovertemplate=(
+        "<b>%{customdata[0]}</b><br>"
+        "%{x:.1f}% change<br>"
+        "FY2024: $%{customdata[1]:.2f}B<br>"
+        "FY2025: $%{customdata[2]:.2f}B<br>"
+        "Dollar loss: $%{customdata[3]:.2f}B<extra></extra>"
+    )
+)
+
+# Alternating row backgrounds
+for i in range(n_rows):
+    if i % 2 == 0:
+        fig.add_shape(
+            type="rect",
+            xref="paper", x0=0, x1=1,
+            yref="y", y0=i - 0.5, y1=i + 0.5,
+            fillcolor="rgba(0,0,0,0.04)",
+            line_width=0,
+            layer="below"
+        )
+
+# Lollipop lines
 for _, row in compare.iterrows():
     fig.add_shape(
         type="line",
-        x0=0,
-        x1=row["pct_change"],
-        y0=row["InstitutionName"],
-        y1=row["InstitutionName"],
+        x0=0, x1=row["pct_change"],
+        y0=row["InstitutionName"], y1=row["InstitutionName"],
         line=dict(color="gray", width=1.5)
     )
 
 fig.add_vline(x=0, line_dash="dash", line_color="gray", line_width=1)
 
 fig.update_layout(
+    height=chart_height,
     plot_bgcolor="white",
     coloraxis_showscale=False,
     xaxis=dict(ticksuffix="%", tickformat=".1f", showgrid=True, gridcolor="rgba(0,0,0,0.06)"),
-    yaxis=dict(showgrid=False)
+    yaxis=dict(
+        showgrid=False,
+        automargin=True,
+        categoryorder="array",
+        categoryarray=sorted_names,
+        tickmode="linear"
+    ),
+    margin=dict(l=280, r=40, t=60, b=60)
 )
 
 st.plotly_chart(fig, use_container_width=True)
