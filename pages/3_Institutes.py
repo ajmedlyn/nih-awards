@@ -7,7 +7,7 @@ from datetime import date
 
 today = date.today()
 st.header("NIH Institute Funding Changes")
-st.caption("Comparing FY2024 vs FY2025 funding by NIH institute. Sorted by proportional loss. Hover over a dot to see the full institute name.")
+st.caption("Comparing FY2024 vs FY2025 funding by NIH institute and center. Sorted by proportional change. Hover over a dot to see the full name.")
 
 con = duckdb.connect("nih_awards_slim.duckdb")
 
@@ -50,7 +50,6 @@ fy2025 = annual[annual["fiscal_year"] == 2025].set_index("ic")["total_dollars"]
 
 compare = pd.DataFrame({"FY2024": fy2024, "FY2025": fy2025}).dropna()
 compare["pct_change"] = (compare["FY2025"] - compare["FY2024"]) / compare["FY2024"] * 100
-compare = compare.nsmallest(15, "pct_change").reset_index()
 compare = compare.sort_values("pct_change").reset_index(drop=True)
 compare["pct_change"] = compare["pct_change"].round(1)
 compare["ic_name"] = compare["ic"].map(ic_name_map).fillna(compare["ic"])
