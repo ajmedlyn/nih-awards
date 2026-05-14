@@ -26,6 +26,11 @@ FROM main.nih_awards_national
 WHERE award_notice_date IS NOT NULL
     AND agency_code = 'NIH'
     AND fiscal_year BETWEEN 2020 AND 2026
+    AND org_name NOT LIKE '%NATIONAL INSTITUTE%'
+    AND org_name NOT LIKE '%NATIONAL CENTER%'
+    AND org_name NOT LIKE '%DIVISION OF%'
+    AND org_name NOT LIKE 'NIH%'
+    AND org_name NOT LIKE '%NATIONAL LIBRARY%'
 GROUP BY fiscal_year, org_name, month
 ORDER BY fiscal_year, org_name, month;
 """).df()
@@ -121,4 +126,4 @@ fig.update_layout(
     margin=dict(l=240, r=40, t=60, b=60)
 )
 
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")

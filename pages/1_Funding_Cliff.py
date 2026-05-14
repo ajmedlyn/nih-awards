@@ -12,6 +12,11 @@ df = con.execute("""
     FROM nih_awards_national
     WHERE fiscal_year BETWEEN 2001 AND 2026
     AND agency_code = 'NIH'
+    AND org_name NOT LIKE '%NATIONAL INSTITUTE%'
+    AND org_name NOT LIKE '%NATIONAL CENTER%'
+    AND org_name NOT LIKE '%DIVISION OF%'
+    AND org_name NOT LIKE 'NIH%'
+    AND org_name NOT LIKE '%NATIONAL LIBRARY%'
     GROUP BY fiscal_year
     ORDER BY fiscal_year
 """).df()
@@ -122,13 +127,17 @@ sply = con.execute("""
     FROM nih_awards_national
     WHERE fiscal_year IN (2025, 2026)
     AND agency_code = 'NIH'
+    AND org_name NOT LIKE '%NATIONAL INSTITUTE%'
+    AND org_name NOT LIKE '%NATIONAL CENTER%'
+    AND org_name NOT LIKE '%DIVISION OF%'
+    AND org_name NOT LIKE 'NIH%'
+    AND org_name NOT LIKE '%NATIONAL LIBRARY%'
     AND CAST(award_notice_date AS DATE) <= ?
     GROUP BY fiscal_year
 """, [today_str]).df()
-print(sply)
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Peak Funding", f"${peak_val:.1f}B", f"FY{peak_year}")
 col2.metric("Prior Fiscal Year", f"${latest_val:.1f}B", f"{yoy_change:.1f}%")
 col3.metric("Current Fiscal Year To-Date", f"${ytd_val:.1f}B", f"FY{ytd_year}", delta_color="off", delta_arrow="off")
 
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")

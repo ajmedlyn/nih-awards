@@ -120,7 +120,7 @@ fig.update_layout(
     margin=dict(l=80, r=40, t=60, b=60)
 )
 
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 # Institute name reference
 with st.expander("What do these abbreviations stand for?"):
@@ -129,6 +129,6 @@ with st.expander("What do these abbreviations stand for?"):
         .rename(columns={"ic": "Abbreviation", "ic_name": "Full Name"})
         .reset_index(drop=True)
     )
-    st.dataframe(ref_df, hide_index=True, use_container_width=True)
+    st.dataframe(ref_df, hide_index=True, width="stretch")
     st.caption("NIH institutes and centers are the individual divisions of the National Institutes of Health. "
                "Each focuses on a specific disease area or research mission and receives its own Congressional appropriation.")

@@ -22,6 +22,11 @@ FROM main.nih_awards_national
 WHERE award_type IN ('1','5','2')
 	AND agency_code = 'NIH'
 	AND fiscal_year IN (2024, 2026)
+    AND org_name NOT LIKE '%NATIONAL INSTITUTE%'
+    AND org_name NOT LIKE '%NATIONAL CENTER%'
+    AND org_name NOT LIKE '%DIVISION OF%'
+    AND org_name NOT LIKE 'NIH%'
+    AND org_name NOT LIKE '%NATIONAL LIBRARY%'
 GROUP BY fiscal_year, award_type, award_notice_date
 ORDER BY fiscal_year desc, award_type, award_notice_date;
 """).df()
@@ -69,6 +74,11 @@ FROM main.nih_awards_national
 WHERE award_type IN ('1','5','2')
 	AND agency_code = 'NIH'
 	AND fiscal_year BETWEEN 2014 AND 2025
+    AND org_name NOT LIKE '%NATIONAL INSTITUTE%'
+    AND org_name NOT LIKE '%NATIONAL CENTER%'
+    AND org_name NOT LIKE '%DIVISION OF%'
+    AND org_name NOT LIKE 'NIH%'
+    AND org_name NOT LIKE '%NATIONAL LIBRARY%'
 GROUP BY fiscal_year, award_type
 ORDER BY fiscal_year desc, award_type;
 """).df()
@@ -107,5 +117,5 @@ fig.add_trace(go.Scatter(
 
 display = display.rename(columns={"fiscal_year": "Fiscal Year"})
 
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 st.dataframe(display, hide_index=True)
