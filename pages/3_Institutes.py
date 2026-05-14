@@ -50,7 +50,9 @@ fy2025 = annual[annual["fiscal_year"] == 2025].set_index("ic")["total_dollars"]
 
 compare = pd.DataFrame({"FY2024": fy2024, "FY2025": fy2025}).dropna()
 compare["pct_change"] = (compare["FY2025"] - compare["FY2024"]) / compare["FY2024"] * 100
-compare = compare.sort_values("pct_change").reset_index(drop=True)
+compare = compare.sort_values("pct_change")
+compare.index.name = "ic"
+compare = compare.reset_index()
 compare["pct_change"] = compare["pct_change"].round(1)
 compare["ic_name"] = compare["ic"].map(ic_name_map).fillna(compare["ic"])
 compare["dollar_loss"] = compare["FY2025"] - compare["FY2024"]
