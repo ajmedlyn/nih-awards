@@ -1,0 +1,902 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>NIH Awards SQL Practice Scaffold</title><style>
+:root { color-scheme: light; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  line-height: 1.48;
+  color: #1f2933;
+  max-width: 8.1in;
+  margin: 0 auto;
+  padding: 0.45in 0.55in;
+  background: white;
+  font-size: 10.5pt;
+}
+h1, h2, h3 { color: #111827; line-height: 1.2; page-break-after: avoid; }
+h1 { font-size: 22pt; margin: 0 0 0.18in; border-bottom: 2px solid #111827; padding-bottom: 0.12in; }
+h2 { font-size: 15pt; margin-top: 0.28in; border-bottom: 1px solid #c9d2dc; padding-bottom: 0.04in; }
+h3 { font-size: 12pt; margin-top: 0.2in; }
+p { margin: 0.08in 0; }
+a { color: inherit; }
+ul, ol { margin-top: 0.06in; padding-left: 0.23in; }
+li { margin: 0.025in 0; }
+code { font-family: "SFMono-Regular", Consolas, monospace; font-size: 9.3pt; background: #f2f5f8; padding: 0.02in 0.04in; border-radius: 3px; }
+pre { background: #f7f9fb; border: 1px solid #d8e0e8; border-radius: 5px; padding: 0.1in; overflow-wrap: anywhere; white-space: pre-wrap; page-break-inside: avoid; }
+pre code { background: transparent; padding: 0; }
+table { border-collapse: collapse; width: 100%; margin: 0.1in 0 0.16in; font-size: 9.4pt; page-break-inside: avoid; }
+th, td { border: 1px solid #c9d2dc; padding: 0.045in 0.06in; vertical-align: top; }
+th { background: #eef2f6; text-align: left; }
+hr { border: 0; border-top: 1px solid #c9d2dc; margin: 0.22in 0; }
+@media print {
+  body { max-width: none; margin: 0; padding: 0; font-size: 10pt; }
+  h2, h3 { page-break-after: avoid; }
+  pre, table { page-break-inside: avoid; }
+}
+</style></head><body>
+<h1>NIH Awards SQL Practice Scaffold</h1>
+<p>This guide is for learning what tool to reach for.</p>
+<p>The goal is not to memorize finished queries. The goal is to build the reflex:</p>
+<pre><code class="language-text">Question shape -&gt; SQL tool -&gt; small proof query -&gt; final query</code></pre>
+<p>Use this alongside:</p>
+<pre><code class="language-text">NIH_Awards_SQL_Learning_Path.md</code></pre>
+<hr>
+<h2>1. The Core Reflex</h2>
+<p>Before writing SQL, classify the question.</p>
+<table>
+<thead><tr><th>If the question asks...</th><th>Reach for...</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td>&quot;How many rows?&quot;</td><td><code>COUNT(*)</code></td><td>Establish table size</td></tr>
+<tr><td>&quot;How many unique things?&quot;</td><td><code>COUNT(DISTINCT key)</code></td><td>Check identity or cardinality</td></tr>
+<tr><td>&quot;Is this one row per X?&quot;</td><td><code>COUNT(*)</code> vs <code>COUNT(DISTINCT X)</code></td><td>Prove grain</td></tr>
+<tr><td>&quot;What is missing?&quot;</td><td><code>LEFT JOIN ... WHERE right.key IS NULL</code></td><td>Anti-join finds gaps</td></tr>
+<tr><td>&quot;What is duplicated?&quot;</td><td><code>GROUP BY key HAVING COUNT(*) &gt; 1</code></td><td>Exposes broken uniqueness</td></tr>
+<tr><td>&quot;Top N by amount/count?&quot;</td><td><code>GROUP BY</code>, <code>SUM</code>, <code>COUNT</code>, <code>ORDER BY</code>, <code>LIMIT</code></td><td>Standard ranking</td></tr>
+<tr><td>&quot;Top N within each group?&quot;</td><td><code>ROW_NUMBER()</code> or <code>RANK()</code></td><td>Ranking inside partitions</td></tr>
+<tr><td>&quot;Latest row per person/project?&quot;</td><td><code>ROW_NUMBER() OVER (...)</code></td><td>Pick one row deterministically</td></tr>
+<tr><td>&quot;Change over time?&quot;</td><td><code>LAG()</code> or <code>LEAD()</code></td><td>Compare current row to prior row</td></tr>
+<tr><td>&quot;Percent of total?&quot;</td><td><code>SUM(...) OVER (...)</code></td><td>Keep detail while adding denominator</td></tr>
+<tr><td>&quot;Running or moving total?&quot;</td><td>Window frame</td><td>Time-series analysis</td></tr>
+<tr><td>&quot;String date problem?&quot;</td><td><code>TRY_CAST(... AS DATE)</code></td><td>Convert safely</td></tr>
+<tr><td>&quot;Nested JSON list?&quot;</td><td><code>json_each()</code></td><td>Explode repeated entities</td></tr>
+<tr><td>&quot;Nullable natural-key join?&quot;</td><td><code>IS NOT DISTINCT FROM</code></td><td>Treat nulls as comparable</td></tr>
+<tr><td>&quot;Build a model table?&quot;</td><td><code>CREATE OR REPLACE TABLE AS</code> plus validation</td><td>Materialize repeatable logic</td></tr>
+</tbody>
+</table>
+<p>Most NIH awards work is some combination of:</p>
+<pre><code class="language-text">grain -&gt; keys -&gt; joins -&gt; dates -&gt; aggregation -&gt; validation</code></pre>
+<hr>
+<h2>2. Your Main Tables</h2>
+<p>Think of the current model this way:</p>
+<table>
+<thead><tr><th>Table</th><th>Mental model</th><th>Grain to remember</th></tr></thead>
+<tbody>
+<tr><td><code>nih_awards_national</code></td><td>Raw source</td><td>One row per application/award row</td></tr>
+<tr><td><code>award_fact</code></td><td>Current fact candidate</td><td>One row per <code>ApplicationID</code></td></tr>
+<tr><td><code>organizations</code></td><td>Org dimension candidate</td><td>One row per <code>organization_id</code></td></tr>
+<tr><td><code>projects</code></td><td>Project dimension candidate</td><td>One row per <code>core_project_num</code></td></tr>
+<tr><td><code>investigators</code></td><td>PI dimension candidate</td><td>One row per <code>profile_id</code></td></tr>
+<tr><td><code>Award_Investigators</code></td><td>Award-PI bridge</td><td>Should be one row per <code>ApplicationID</code>, <code>profile_id</code></td></tr>
+<tr><td><code>nih_institutes</code></td><td>Institute dimension</td><td>One row per <code>agency_ic_admin_code</code></td></tr>
+</tbody>
+</table>
+<p>When in doubt, ask:</p>
+<pre><code class="language-text">Which table should control the row count?</code></pre>
+<p>For award-level analysis, usually <code>award_fact</code> or <code>nih_awards_national</code> controls the row count.</p>
+<p>For PI-level analysis, usually <code>investigators</code> controls the row count.</p>
+<p>For award-to-PI analysis, the bridge controls the row count.</p>
+<hr>
+<h2>3. The SQL Toolbelt</h2>
+<h3>Tool 1: Grain Check</h3>
+<p>Use when:</p>
+<pre><code class="language-text">I need to know whether this table is really one row per key.</code></pre>
+<p>Template:</p>
+<pre><code class="language-sql">SELECT
+    COUNT(*) AS rows,
+    COUNT(DISTINCT key_column) AS distinct_keys,
+    COUNT(*) - COUNT(DISTINCT key_column) AS duplicate_rows
+FROM table_name;</code></pre>
+<p>NIH version:</p>
+<pre><code class="language-sql">SELECT
+    COUNT(*) AS rows,
+    COUNT(DISTINCT ApplicationID) AS distinct_application_ids,
+    COUNT(*) - COUNT(DISTINCT ApplicationID) AS duplicate_rows
+FROM award_fact;</code></pre>
+<p>How to think:</p>
+<pre><code class="language-text">If rows = distinct keys, the key uniquely identifies rows.
+If rows &gt; distinct keys, the table is more detailed than that key.</code></pre>
+<p>Practice:</p>
+<ol>
+<li>Prove the grain of <code>award_fact</code>.</li>
+<li>Prove the grain of <code>projects</code>.</li>
+<li>Test whether <code>org_duns</code> alone is enough for <code>organizations</code>.</li>
+<li>Test whether <code>Award_Investigators</code> is unique by <code>(ApplicationID, profile_id)</code>.</li>
+</ol>
+<p>Hint:</p>
+<pre><code class="language-sql">COUNT(DISTINCT col1 || &#x27;|&#x27; || col2)</code></pre>
+<p>is a quick composite-key check. For production-quality work, prefer grouping by both columns.</p>
+<hr>
+<h3>Tool 2: Duplicate Finder</h3>
+<p>Use when:</p>
+<pre><code class="language-text">I expected one row per key, but I need to find where that breaks.</code></pre>
+<p>Template:</p>
+<pre><code class="language-sql">SELECT
+    key_column,
+    COUNT(*) AS rows
+FROM table_name
+GROUP BY key_column
+HAVING COUNT(*) &gt; 1
+ORDER BY rows DESC;</code></pre>
+<p>NIH version:</p>
+<pre><code class="language-sql">SELECT
+    ApplicationID,
+    profile_id,
+    COUNT(*) AS rows
+FROM Award_Investigators
+GROUP BY ApplicationID, profile_id
+HAVING COUNT(*) &gt; 1
+ORDER BY rows DESC, ApplicationID;</code></pre>
+<p>What this tells you:</p>
+<pre><code class="language-text">The bridge currently has repeated application/profile pairs.
+That means joins from awards to investigators may multiply rows.</code></pre>
+<p>Next move:</p>
+<p>Use <code>ROW_NUMBER()</code> to inspect or dedupe.</p>
+<hr>
+<h3>Tool 3: Anti-Join</h3>
+<p>Use when:</p>
+<pre><code class="language-text">I need to find records in one table that do not have a match in another table.</code></pre>
+<p>Template:</p>
+<pre><code class="language-sql">SELECT COUNT(*) AS missing_rows
+FROM child c
+LEFT JOIN parent p
+    ON c.parent_key = p.parent_key
+WHERE c.parent_key IS NOT NULL
+  AND p.parent_key IS NULL;</code></pre>
+<p>NIH version:</p>
+<pre><code class="language-sql">SELECT COUNT(*) AS award_fact_org_orphans
+FROM award_fact af
+LEFT JOIN organizations o
+    ON af.ORG_ID = o.organization_id
+WHERE af.ORG_ID IS NOT NULL
+  AND o.organization_id IS NULL;</code></pre>
+<p>Use anti-joins for:</p>
+<ul>
+<li>Fact rows missing a dimension match.</li>
+<li>Dimension rows not used by facts.</li>
+<li>Raw keys missing from normalized tables.</li>
+<li>Bridge rows pointing to missing parent records.</li>
+</ul>
+<p>Practice:</p>
+<ol>
+<li>Find <code>award_fact</code> rows whose <code>IC_Code</code> does not exist in <code>nih_institutes</code>.</li>
+<li>Find raw <code>core_project_num</code> values missing from <code>projects</code>.</li>
+<li>Find <code>Award_Investigators</code> rows whose <code>profile_id</code> does not exist in <code>investigators</code>.</li>
+<li>Find awards in <code>award_fact</code> with no investigator bridge rows.</li>
+</ol>
+<p>Hint for raw projects:</p>
+<pre><code class="language-sql">SELECT DISTINCT nan.core_project_num
+FROM nih_awards_national nan
+LEFT JOIN projects p
+    ON nan.core_project_num = p.core_project_num
+WHERE nan.core_project_num IS NOT NULL
+  AND p.core_project_num IS NULL;</code></pre>
+<hr>
+<h3>Tool 4: Join Multiplication Check</h3>
+<p>Use when:</p>
+<pre><code class="language-text">My totals got too large after a join.</code></pre>
+<p>The fear:</p>
+<pre><code class="language-text">One award joins to multiple rows, so award_amount gets counted multiple times.</code></pre>
+<p>Template:</p>
+<pre><code class="language-sql">WITH joined AS (
+    SELECT
+        left_table.primary_key
+    FROM left_table
+    JOIN right_table
+        ON ...
+)
+SELECT
+    COUNT(*) AS joined_rows,
+    COUNT(DISTINCT primary_key) AS distinct_left_keys,
+    COUNT(*) - COUNT(DISTINCT primary_key) AS extra_rows
+FROM joined;</code></pre>
+<p>NIH version:</p>
+<pre><code class="language-sql">WITH joined AS (
+    SELECT
+        af.ApplicationID
+    FROM award_fact af
+    JOIN Award_Investigators ai
+        ON af.ApplicationID = ai.ApplicationID
+)
+SELECT
+    COUNT(*) AS joined_rows,
+    COUNT(DISTINCT ApplicationID) AS distinct_awards,
+    COUNT(*) - COUNT(DISTINCT ApplicationID) AS extra_rows
+FROM joined;</code></pre>
+<p>Interpretation:</p>
+<pre><code class="language-text">extra_rows are not always bad.
+For award-to-PI joins, extra rows are expected because one award can have multiple PIs.
+But if you then SUM award_amount, you must decide whether to count each award once or allocate across PIs.</code></pre>
+<p>Question to ask:</p>
+<pre><code class="language-text">Am I doing award-level analysis or investigator-participation analysis?</code></pre>
+<hr>
+<h3>Tool 5: Grouped Aggregation</h3>
+<p>Use when:</p>
+<pre><code class="language-text">I need totals, counts, averages, or medians by category.</code></pre>
+<p>Template:</p>
+<pre><code class="language-sql">SELECT
+    category,
+    COUNT(*) AS row_count,
+    SUM(amount) AS total_amount
+FROM table_name
+GROUP BY category
+ORDER BY total_amount DESC;</code></pre>
+<p>NIH version:</p>
+<pre><code class="language-sql">SELECT
+    Federal_Fiscal_Year,
+    IC_Code,
+    COUNT(*) AS award_count,
+    SUM(TotalCosts) AS total_costs
+FROM award_fact
+GROUP BY Federal_Fiscal_Year, IC_Code
+ORDER BY Federal_Fiscal_Year, total_costs DESC;</code></pre>
+<p>Reach for this when you hear:</p>
+<pre><code class="language-text">by fiscal year
+by institute
+by organization
+by activity code
+top funded
+average award size</code></pre>
+<p>Practice:</p>
+<ol>
+<li>Funding by fiscal year.</li>
+<li>Funding by IC and fiscal year.</li>
+<li>Award count by activity code.</li>
+<li>Average award size by organization state.</li>
+<li>Median award size by activity code.</li>
+</ol>
+<p>Hint:</p>
+<p>DuckDB supports:</p>
+<pre><code class="language-sql">median(TotalCosts)</code></pre>
+<hr>
+<h3>Tool 6: Ranking</h3>
+<p>Use when:</p>
+<pre><code class="language-text">I need top N overall or top N within each group.</code></pre>
+<p>Top N overall:</p>
+<pre><code class="language-sql">SELECT
+    org_name,
+    SUM(TotalCosts) AS total_costs
+FROM award_fact af
+JOIN organizations o
+    ON af.ORG_ID = o.organization_id
+GROUP BY org_name
+ORDER BY total_costs DESC
+LIMIT 10;</code></pre>
+<p>Top N within each fiscal year:</p>
+<pre><code class="language-sql">WITH by_ic AS (
+    SELECT
+        Federal_Fiscal_Year,
+        IC_Code,
+        SUM(TotalCosts) AS total_costs
+    FROM award_fact
+    GROUP BY Federal_Fiscal_Year, IC_Code
+),
+ranked AS (
+    SELECT
+        *,
+        ROW_NUMBER() OVER (
+            PARTITION BY Federal_Fiscal_Year
+            ORDER BY total_costs DESC
+        ) AS rank_in_year
+    FROM by_ic
+)
+SELECT *
+FROM ranked
+WHERE rank_in_year &lt;= 10
+ORDER BY Federal_Fiscal_Year, rank_in_year;</code></pre>
+<p>Tool choice:</p>
+<table>
+<thead><tr><th>Need</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>Exactly 10 rows per group</td><td><code>ROW_NUMBER()</code></td></tr>
+<tr><td>Preserve ties</td><td><code>RANK()</code></td></tr>
+<tr><td>Preserve ties without gaps</td><td><code>DENSE_RANK()</code></td></tr>
+</tbody>
+</table>
+<hr>
+<h3>Tool 7: Pick One Row Per Entity</h3>
+<p>Use when:</p>
+<pre><code class="language-text">I have many observations but need one canonical record.</code></pre>
+<p>Examples:</p>
+<ul>
+<li>One display name per investigator.</li>
+<li>One latest title per project.</li>
+<li>One most recent award per project.</li>
+<li>One preferred organization record.</li>
+</ul>
+<p>Template:</p>
+<pre><code class="language-sql">WITH ranked AS (
+    SELECT
+        *,
+        ROW_NUMBER() OVER (
+            PARTITION BY entity_key
+            ORDER BY sort_column DESC
+        ) AS rn
+    FROM source_table
+)
+SELECT *
+FROM ranked
+WHERE rn = 1;</code></pre>
+<p>NIH investigator version:</p>
+<pre><code class="language-sql">WITH ranked AS (
+    SELECT
+        ai.profile_id,
+        ai.Full_Name,
+        ai.Last_Name,
+        ai.First_Name,
+        ai.ApplicationID,
+        ROW_NUMBER() OVER (
+            PARTITION BY ai.profile_id
+            ORDER BY
+                TRY_CAST(af.award_notice_date AS DATE) DESC NULLS LAST,
+                ai.ApplicationID DESC
+        ) AS rn
+    FROM Award_Investigators ai
+    JOIN award_fact af
+        ON ai.ApplicationID = af.ApplicationID
+)
+SELECT *
+FROM ranked
+WHERE rn = 1;</code></pre>
+<p>Why <code>NULLS LAST</code> matters:</p>
+<pre><code class="language-text">The documented rule says real award dates should beat null dates.
+If you use NULLS FIRST, a null-dated old record can become the display name.</code></pre>
+<p>DuckDB shortcut:</p>
+<pre><code class="language-sql">SELECT ...
+FROM ...
+QUALIFY ROW_NUMBER() OVER (...) = 1;</code></pre>
+<p>Use <code>QUALIFY</code> when you want to filter on a window function without adding another CTE.</p>
+<hr>
+<h3>Tool 8: Time Comparison</h3>
+<p>Use when:</p>
+<pre><code class="language-text">I need growth, decline, first/last, or change over time.</code></pre>
+<p>Common tools:</p>
+<table>
+<thead><tr><th>Need</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>Previous year value</td><td><code>LAG()</code></td></tr>
+<tr><td>Next year value</td><td><code>LEAD()</code></td></tr>
+<tr><td>First year</td><td><code>MIN(fiscal_year)</code></td></tr>
+<tr><td>Last year</td><td><code>MAX(fiscal_year)</code></td></tr>
+<tr><td>Moving average</td><td><code>AVG(...) OVER (...)</code></td></tr>
+<tr><td>Running total</td><td><code>SUM(...) OVER (...)</code></td></tr>
+</tbody>
+</table>
+<p>NIH year-over-year funding:</p>
+<pre><code class="language-sql">WITH annual AS (
+    SELECT
+        Federal_Fiscal_Year,
+        IC_Code,
+        SUM(TotalCosts) AS total_costs
+    FROM award_fact
+    GROUP BY Federal_Fiscal_Year, IC_Code
+)
+SELECT
+    *,
+    total_costs - LAG(total_costs) OVER (
+        PARTITION BY IC_Code
+        ORDER BY Federal_Fiscal_Year
+    ) AS yoy_change
+FROM annual
+ORDER BY IC_Code, Federal_Fiscal_Year;</code></pre>
+<p>Three-year moving average:</p>
+<pre><code class="language-sql">AVG(total_costs) OVER (
+    PARTITION BY IC_Code
+    ORDER BY Federal_Fiscal_Year
+    ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
+) AS three_year_avg</code></pre>
+<p>Think:</p>
+<pre><code class="language-text">GROUP BY creates one row per time period first.
+Window functions compare those already-aggregated rows.</code></pre>
+<hr>
+<h3>Tool 9: Percent Of Total</h3>
+<p>Use when:</p>
+<pre><code class="language-text">I need share, mix, contribution, or percent of annual funding.</code></pre>
+<p>Template:</p>
+<pre><code class="language-sql">SELECT
+    group_col,
+    amount,
+    amount / SUM(amount) OVER () AS pct_of_total
+FROM grouped_data;</code></pre>
+<p>NIH version:</p>
+<pre><code class="language-sql">WITH annual_ic AS (
+    SELECT
+        Federal_Fiscal_Year,
+        IC_Code,
+        SUM(TotalCosts) AS total_costs
+    FROM award_fact
+    GROUP BY Federal_Fiscal_Year, IC_Code
+)
+SELECT
+    *,
+    total_costs
+        / SUM(total_costs) OVER (PARTITION BY Federal_Fiscal_Year)
+        AS pct_of_year
+FROM annual_ic
+ORDER BY Federal_Fiscal_Year, pct_of_year DESC;</code></pre>
+<p>Reach for:</p>
+<pre><code class="language-text">SUM(...) OVER (PARTITION BY ...)</code></pre>
+<p>when you need a denominator but do not want to collapse the rows.</p>
+<hr>
+<h3>Tool 10: Date Safety</h3>
+<p>Use when:</p>
+<pre><code class="language-text">The source stores dates as strings.</code></pre>
+<p>First validate:</p>
+<pre><code class="language-sql">SELECT
+    COUNT(*) AS rows,
+    COUNT(*) FILTER (
+        WHERE award_notice_date IS NOT NULL
+          AND TRY_CAST(award_notice_date AS DATE) IS NULL
+    ) AS invalid_dates
+FROM award_fact;</code></pre>
+<p>Then convert:</p>
+<pre><code class="language-sql">TRY_CAST(award_notice_date AS DATE) AS award_notice_date</code></pre>
+<p>Active-in-period question:</p>
+<pre><code class="language-text">Was this project active at any time during federal FY2024?</code></pre>
+<p>Reach for interval overlap:</p>
+<pre><code class="language-sql">WHERE TRY_CAST(project_start_date AS DATE) &lt;= DATE &#x27;2024-09-30&#x27;
+  AND TRY_CAST(project_end_date AS DATE) &gt;= DATE &#x27;2023-10-01&#x27;</code></pre>
+<p>Pattern:</p>
+<pre><code class="language-text">start &lt;= period_end AND end &gt;= period_start</code></pre>
+<p>This is the standard overlap test.</p>
+<hr>
+<h3>Tool 11: JSON Explosion</h3>
+<p>Use when:</p>
+<pre><code class="language-text">A column contains a list of repeated objects.</code></pre>
+<p>For NIH, <code>pis_json</code> contains multiple investigator objects per award.</p>
+<p>Reach for:</p>
+<pre><code class="language-sql">json_each()</code></pre>
+<p>NIH pattern:</p>
+<pre><code class="language-sql">SELECT
+    nan.appl_id AS ApplicationID,
+    pi.key AS pi_position,
+    json_extract_string(pi.value, &#x27;$.profile_id&#x27;) AS profile_id,
+    json_extract_string(pi.value, &#x27;$.first_name&#x27;) AS first_name,
+    json_extract_string(pi.value, &#x27;$.last_name&#x27;) AS last_name,
+    json_extract_string(pi.value, &#x27;$.is_contact_pi&#x27;)::BOOLEAN AS is_contact_pi
+FROM nih_awards_national nan,
+     json_each(nan.pis_json) AS pi;</code></pre>
+<p>Thought process:</p>
+<pre><code class="language-text">Raw award row -&gt; explode PI list -&gt; one row per award plus PI -&gt; bridge table</code></pre>
+<p>Validation after explosion:</p>
+<pre><code class="language-sql">SELECT
+    COUNT(*) AS rows,
+    COUNT(DISTINCT ApplicationID || &#x27;|&#x27; || profile_id) AS distinct_award_pi_pairs
+FROM exploded_pis;</code></pre>
+<hr>
+<h3>Tool 12: CTE Ladder</h3>
+<p>Use when:</p>
+<pre><code class="language-text">The query has more than one idea in it.</code></pre>
+<p>CTE structure:</p>
+<pre><code class="language-sql">WITH base AS (
+    -- select the rows and columns you need
+),
+cleaned AS (
+    -- cast dates, clean strings, filter bad rows
+),
+aggregated AS (
+    -- group to the desired grain
+),
+ranked AS (
+    -- window functions
+)
+SELECT *
+FROM ranked;</code></pre>
+<p>Rule:</p>
+<pre><code class="language-text">Each CTE should change the row grain or make one idea clearer.</code></pre>
+<p>Bad sign:</p>
+<pre><code class="language-text">You cannot explain what a CTE does in one sentence.</code></pre>
+<hr>
+<h2>4. Question Shapes And First Moves</h2>
+<h3>Shape A: &quot;How many awards...&quot;</h3>
+<p>First table:</p>
+<pre><code class="language-text">award_fact</code></pre>
+<p>First move:</p>
+<pre><code class="language-sql">SELECT COUNT(*)
+FROM award_fact;</code></pre>
+<p>Then add filters.</p>
+<p>Example:</p>
+<pre><code class="language-text">How many NIH awards were active in FY2024?</code></pre>
+<p>Tool:</p>
+<pre><code class="language-text">Date overlap filter</code></pre>
+<p>Skeleton:</p>
+<pre><code class="language-sql">SELECT COUNT(*)
+FROM nih_awards_national
+WHERE TRY_CAST(project_start_date AS DATE) &lt;= DATE &#x27;2024-09-30&#x27;
+  AND TRY_CAST(project_end_date AS DATE) &gt;= DATE &#x27;2023-10-01&#x27;;</code></pre>
+<hr>
+<h3>Shape B: &quot;Which organizations...&quot;</h3>
+<p>First table:</p>
+<pre><code class="language-text">award_fact joined to organizations</code></pre>
+<p>First move:</p>
+<pre><code class="language-sql">SELECT
+    o.org_name,
+    SUM(af.TotalCosts) AS total_costs
+FROM award_fact af
+JOIN organizations o
+    ON af.ORG_ID = o.organization_id
+GROUP BY o.org_name
+ORDER BY total_costs DESC;</code></pre>
+<p>Warning:</p>
+<pre><code class="language-text">Do not join to Award_Investigators unless the question is PI-related.
+That can multiply award rows.</code></pre>
+<hr>
+<h3>Shape C: &quot;Which PIs...&quot;</h3>
+<p>First table:</p>
+<pre><code class="language-text">Award_Investigators bridge</code></pre>
+<p>Then join:</p>
+<pre><code class="language-text">bridge -&gt; investigators
+bridge -&gt; award_fact</code></pre>
+<p>Question to answer first:</p>
+<pre><code class="language-text">Do I want only contact PIs or all listed PIs?</code></pre>
+<p>Contact PI funding skeleton:</p>
+<pre><code class="language-sql">SELECT
+    i.profile_id,
+    i.Full_Name,
+    SUM(af.TotalCosts) AS total_costs
+FROM Award_Investigators ai
+JOIN investigators i
+    ON ai.profile_id = i.profile_id
+JOIN award_fact af
+    ON ai.ApplicationID = af.ApplicationID
+WHERE ai.is_contact_pi = &#x27;true&#x27;
+GROUP BY i.profile_id, i.Full_Name
+ORDER BY total_costs DESC;</code></pre>
+<p>Warning:</p>
+<pre><code class="language-text">If you include all PIs, the same award amount may appear once per PI.
+That is fine for participation analysis, but not for unduplicated award totals.</code></pre>
+<hr>
+<h3>Shape D: &quot;Which projects...&quot;</h3>
+<p>First table:</p>
+<pre><code class="language-text">projects</code></pre>
+<p>But current <code>award_fact</code> does not yet include <code>Project_ID</code>, so for now join through raw <code>core_project_num</code> or rebuild the fact.</p>
+<p>Temporary pattern:</p>
+<pre><code class="language-sql">SELECT
+    p.Project_ID,
+    p.core_project_num,
+    SUM(nan.award_amount) AS total_award_amount
+FROM nih_awards_national nan
+JOIN projects p
+    ON nan.core_project_num = p.core_project_num
+GROUP BY p.Project_ID, p.core_project_num
+ORDER BY total_award_amount DESC;</code></pre>
+<p>Better normalized future:</p>
+<pre><code class="language-text">fact_award.project_id -&gt; dim_project.project_id</code></pre>
+<hr>
+<h3>Shape E: &quot;What changed over time...&quot;</h3>
+<p>First move:</p>
+<pre><code class="language-text">Aggregate to one row per time period and entity.</code></pre>
+<p>Then:</p>
+<pre><code class="language-text">Use LAG().</code></pre>
+<p>Skeleton:</p>
+<pre><code class="language-sql">WITH annual AS (
+    SELECT
+        Federal_Fiscal_Year,
+        IC_Code,
+        SUM(TotalCosts) AS total_costs
+    FROM award_fact
+    GROUP BY Federal_Fiscal_Year, IC_Code
+)
+SELECT
+    *,
+    total_costs - LAG(total_costs) OVER (
+        PARTITION BY IC_Code
+        ORDER BY Federal_Fiscal_Year
+    ) AS change_from_prior_year
+FROM annual;</code></pre>
+<p>Common mistake:</p>
+<pre><code class="language-text">Trying to use LAG before grouping. Group first, compare second.</code></pre>
+<hr>
+<h3>Shape F: &quot;Is the normalized model correct?&quot;</h3>
+<p>Reach for validation query sets.</p>
+<p>Minimum pattern:</p>
+<pre><code class="language-sql">SELECT &#x27;fact row count&#x27; AS test_name,
+       COUNT(*) AS observed_value
+FROM fact_award
+
+UNION ALL
+
+SELECT &#x27;raw row count&#x27;,
+       COUNT(*)
+FROM nih_awards_national;</code></pre>
+<p>Better pattern:</p>
+<pre><code class="language-text">Each test should return:
+test_name, observed_value, expected_value, status</code></pre>
+<p>Skeleton:</p>
+<pre><code class="language-sql">SELECT
+    &#x27;fact row count equals raw row count&#x27; AS test_name,
+    (SELECT COUNT(*) FROM fact_award) AS observed_value,
+    (SELECT COUNT(*) FROM nih_awards_national) AS expected_value,
+    CASE
+        WHEN (SELECT COUNT(*) FROM fact_award)
+           = (SELECT COUNT(*) FROM nih_awards_national)
+        THEN &#x27;pass&#x27;
+        ELSE &#x27;fail&#x27;
+    END AS status;</code></pre>
+<hr>
+<h2>5. Scaffolded Practice Path</h2>
+<h3>Level 1: Orientation</h3>
+<p>Skill:</p>
+<pre><code class="language-text">Know where you are before writing joins.</code></pre>
+<p>Practice question:</p>
+<pre><code class="language-text">What are the largest tables, and what are their likely grains?</code></pre>
+<p>Reach for:</p>
+<pre><code class="language-text">duckdb_tables()
+DESCRIBE
+COUNT(*)
+COUNT(DISTINCT key)</code></pre>
+<p>Hints:</p>
+<ol>
+<li>Start with table list and row counts.</li>
+<li>Pick one candidate key per table.</li>
+<li>Compare total rows to distinct key count.</li>
+<li>Write the grain in English.</li>
+</ol>
+<p>Skeleton:</p>
+<pre><code class="language-sql">SELECT table_name, estimated_size
+FROM duckdb_tables()
+WHERE schema_name = &#x27;main&#x27;
+ORDER BY estimated_size DESC;</code></pre>
+<hr>
+<h3>Level 2: Referential Integrity</h3>
+<p>Skill:</p>
+<pre><code class="language-text">Find missing parent rows.</code></pre>
+<p>Practice question:</p>
+<pre><code class="language-text">Does every non-null organization key in award_fact resolve to organizations?</code></pre>
+<p>Reach for:</p>
+<pre><code class="language-text">Anti-join</code></pre>
+<p>Hints:</p>
+<ol>
+<li><code>award_fact</code> is the child.</li>
+<li><code>organizations</code> is the parent.</li>
+<li>Keep non-null child keys.</li>
+<li>Missing parent means joined parent key is null.</li>
+</ol>
+<p>Skeleton:</p>
+<pre><code class="language-sql">SELECT COUNT(*)
+FROM award_fact af
+LEFT JOIN organizations o
+    ON af.ORG_ID = o.organization_id
+WHERE af.ORG_ID IS NOT NULL
+  AND o.organization_id IS NULL;</code></pre>
+<p>Repeat for:</p>
+<ul>
+<li><code>award_fact.IC_Code</code> -&gt; <code>nih_institutes.agency_ic_admin_code</code></li>
+<li><code>Award_Investigators.ApplicationID</code> -&gt; <code>award_fact.ApplicationID</code></li>
+<li><code>Award_Investigators.profile_id</code> -&gt; <code>investigators.profile_id</code></li>
+</ul>
+<hr>
+<h3>Level 3: Safe Aggregation</h3>
+<p>Skill:</p>
+<pre><code class="language-text">Aggregate at the right grain without accidental duplication.</code></pre>
+<p>Practice question:</p>
+<pre><code class="language-text">What are the top 20 organizations by total award amount?</code></pre>
+<p>Reach for:</p>
+<pre><code class="language-text">Join fact to one-row-per-org dimension, then GROUP BY.</code></pre>
+<p>Hints:</p>
+<ol>
+<li>Start from <code>award_fact</code>, because the measure lives there.</li>
+<li>Join <code>organizations</code> by <code>ORG_ID</code>.</li>
+<li>Group by org identity and display label.</li>
+<li>Sort by <code>SUM(TotalCosts)</code>.</li>
+</ol>
+<p>Skeleton:</p>
+<pre><code class="language-sql">SELECT
+    o.organization_id,
+    o.org_name,
+    SUM(af.TotalCosts) AS total_costs
+FROM award_fact af
+JOIN organizations o
+    ON af.ORG_ID = o.organization_id
+GROUP BY o.organization_id, o.org_name
+ORDER BY total_costs DESC
+LIMIT 20;</code></pre>
+<p>Check:</p>
+<pre><code class="language-text">Does joining organizations multiply award rows?</code></pre>
+<p>Use:</p>
+<pre><code class="language-sql">WITH joined AS (
+    SELECT af.ApplicationID
+    FROM award_fact af
+    JOIN organizations o
+        ON af.ORG_ID = o.organization_id
+)
+SELECT
+    COUNT(*) AS joined_rows,
+    COUNT(DISTINCT ApplicationID) AS distinct_awards
+FROM joined;</code></pre>
+<hr>
+<h3>Level 4: Bridge Tables</h3>
+<p>Skill:</p>
+<pre><code class="language-text">Analyze many-to-many relationships without lying to yourself.</code></pre>
+<p>Practice question:</p>
+<pre><code class="language-text">Who are the top contact PIs by award amount?</code></pre>
+<p>Reach for:</p>
+<pre><code class="language-text">Bridge table + contact PI filter + fact join.</code></pre>
+<p>Hints:</p>
+<ol>
+<li>Start with <code>Award_Investigators</code>.</li>
+<li>Filter to <code>is_contact_pi = &#x27;true&#x27;</code>.</li>
+<li>Join to <code>award_fact</code> for dollars.</li>
+<li>Join to <code>investigators</code> for display name.</li>
+<li>Group by <code>profile_id</code>, not just name.</li>
+</ol>
+<p>Skeleton:</p>
+<pre><code class="language-sql">SELECT
+    i.profile_id,
+    i.Full_Name,
+    COUNT(DISTINCT af.ApplicationID) AS award_count,
+    SUM(af.TotalCosts) AS total_costs
+FROM Award_Investigators ai
+JOIN investigators i
+    ON ai.profile_id = i.profile_id
+JOIN award_fact af
+    ON ai.ApplicationID = af.ApplicationID
+WHERE ai.is_contact_pi = &#x27;true&#x27;
+GROUP BY i.profile_id, i.Full_Name
+ORDER BY total_costs DESC
+LIMIT 20;</code></pre>
+<p>Debug question:</p>
+<pre><code class="language-text">What happens if you remove the contact PI filter?</code></pre>
+<p>Expected learning:</p>
+<pre><code class="language-text">The result changes from award ownership to award participation.
+The same award can contribute to multiple PIs.</code></pre>
+<hr>
+<h3>Level 5: Canonical Rows</h3>
+<p>Skill:</p>
+<pre><code class="language-text">Pick one best row per entity using explicit business rules.</code></pre>
+<p>Practice question:</p>
+<pre><code class="language-text">How should dim_investigator choose one display name per profile_id?</code></pre>
+<p>Reach for:</p>
+<pre><code class="language-text">ROW_NUMBER() with PARTITION BY profile_id.</code></pre>
+<p>Hints:</p>
+<ol>
+<li>Identity is <code>profile_id</code>.</li>
+<li>Display name comes from observed award-investigator rows.</li>
+<li>Latest non-null award notice date wins.</li>
+<li>Highest <code>ApplicationID</code> breaks ties.</li>
+<li>Null dates go last.</li>
+</ol>
+<p>Skeleton:</p>
+<pre><code class="language-sql">WITH ranked AS (
+    SELECT
+        ai.profile_id,
+        ai.Full_Name,
+        ai.Last_Name,
+        ai.First_Name,
+        ai.ApplicationID,
+        ROW_NUMBER() OVER (
+            PARTITION BY ai.profile_id
+            ORDER BY
+                TRY_CAST(af.award_notice_date AS DATE) DESC NULLS LAST,
+                ai.ApplicationID DESC
+        ) AS rn
+    FROM Award_Investigators ai
+    JOIN award_fact af
+        ON ai.ApplicationID = af.ApplicationID
+)
+SELECT *
+FROM ranked
+WHERE rn = 1;</code></pre>
+<p>Check:</p>
+<pre><code class="language-text">Does every profile_id appear once?</code></pre>
+<p>Reach for:</p>
+<pre><code class="language-sql">COUNT(*) vs COUNT(DISTINCT profile_id)</code></pre>
+<hr>
+<h3>Level 6: JSON To Bridge</h3>
+<p>Skill:</p>
+<pre><code class="language-text">Turn nested source data into relational rows.</code></pre>
+<p>Practice question:</p>
+<pre><code class="language-text">How do I rebuild Award_Investigators from pis_json?</code></pre>
+<p>Reach for:</p>
+<pre><code class="language-text">json_each + extract fields + dedupe.</code></pre>
+<p>Hints:</p>
+<ol>
+<li>Start from <code>nih_awards_national</code>.</li>
+<li>Cross join to <code>json_each(nan.pis_json)</code>.</li>
+<li>Extract profile/name/contact fields.</li>
+<li>Remove rows with null <code>profile_id</code>.</li>
+<li>Dedupe <code>(ApplicationID, profile_id)</code>.</li>
+</ol>
+<p>Skeleton:</p>
+<pre><code class="language-sql">WITH exploded AS (
+    SELECT
+        nan.appl_id AS ApplicationID,
+        pi.key AS pi_position,
+        json_extract_string(pi.value, &#x27;$.profile_id&#x27;) AS profile_id,
+        upper(json_extract_string(pi.value, &#x27;$.last_name&#x27;)) AS last_name,
+        upper(json_extract_string(pi.value, &#x27;$.first_name&#x27;)) AS first_name,
+        json_extract_string(pi.value, &#x27;$.is_contact_pi&#x27;)::BOOLEAN AS is_contact_pi
+    FROM nih_awards_national nan,
+         json_each(nan.pis_json) AS pi
+),
+ranked AS (
+    SELECT
+        *,
+        ROW_NUMBER() OVER (
+            PARTITION BY ApplicationID, profile_id
+            ORDER BY is_contact_pi DESC, pi_position
+        ) AS rn
+    FROM exploded
+    WHERE profile_id IS NOT NULL
+)
+SELECT *
+FROM ranked
+WHERE rn = 1;</code></pre>
+<p>Validation:</p>
+<pre><code class="language-sql">SELECT
+    COUNT(*) AS rows,
+    COUNT(DISTINCT ApplicationID || &#x27;|&#x27; || profile_id) AS distinct_pairs
+FROM bridge_award_investigator;</code></pre>
+<hr>
+<h2>6. Drill Cards</h2>
+<p>Use these like flashcards.</p>
+<h3>Card 1</h3>
+<p>Question:</p>
+<pre><code class="language-text">Is this table one row per ApplicationID?</code></pre>
+<p>Reach for:</p>
+<pre><code class="language-text">COUNT(*) vs COUNT(DISTINCT ApplicationID)</code></pre>
+<hr>
+<h3>Card 2</h3>
+<p>Question:</p>
+<pre><code class="language-text">Which raw projects are missing from the project dimension?</code></pre>
+<p>Reach for:</p>
+<pre><code class="language-text">Anti-join from raw to dimension</code></pre>
+<hr>
+<h3>Card 3</h3>
+<p>Question:</p>
+<pre><code class="language-text">Why did total funding increase after joining investigators?</code></pre>
+<p>Reach for:</p>
+<pre><code class="language-text">Join multiplication check</code></pre>
+<p>Then ask:</p>
+<pre><code class="language-text">Award-level total or PI-participation total?</code></pre>
+<hr>
+<h3>Card 4</h3>
+<p>Question:</p>
+<pre><code class="language-text">How do I choose the latest record per investigator?</code></pre>
+<p>Reach for:</p>
+<pre><code class="language-text">ROW_NUMBER() OVER (PARTITION BY profile_id ORDER BY date DESC NULLS LAST)</code></pre>
+<hr>
+<h3>Card 5</h3>
+<p>Question:</p>
+<pre><code class="language-text">How do I calculate each institute&#x27;s share of annual funding?</code></pre>
+<p>Reach for:</p>
+<pre><code class="language-text">SUM(total) OVER (PARTITION BY fiscal_year)</code></pre>
+<hr>
+<h3>Card 6</h3>
+<p>Question:</p>
+<pre><code class="language-text">How do I compare this year&#x27;s funding to last year&#x27;s?</code></pre>
+<p>Reach for:</p>
+<pre><code class="language-text">GROUP BY year first, then LAG()</code></pre>
+<hr>
+<h3>Card 7</h3>
+<p>Question:</p>
+<pre><code class="language-text">How do I safely use a source date stored as text?</code></pre>
+<p>Reach for:</p>
+<pre><code class="language-text">TRY_CAST(text_col AS DATE)</code></pre>
+<hr>
+<h3>Card 8</h3>
+<p>Question:</p>
+<pre><code class="language-text">How do I extract PIs from pis_json?</code></pre>
+<p>Reach for:</p>
+<pre><code class="language-text">json_each()</code></pre>
+<hr>
+<h2>7. The Final Mental Model</h2>
+<p>When stuck, use this loop:</p>
+<pre><code class="language-text">1. Name the grain I want.
+2. Pick the table that naturally has that grain.
+3. Identify the measures I need.
+4. Identify the attributes I need.
+5. Join only the dimensions needed for those attributes.
+6. Check whether the join changed the row count.
+7. Aggregate only after the row grain is correct.
+8. Validate with counts and anti-joins.</code></pre>
+<p>For this project, the most important sentence is:</p>
+<pre><code class="language-text">Do not join more tables until you know what row grain you currently have.</code></pre>
+</body></html>

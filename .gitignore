@@ -1,0 +1,29 @@
+# Local databases and their journal / spill files belong outside version control.
+*.duckdb
+*.duckdb.*
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.parquet
+/data/award_text/
+
+# Keep the existing small dashboard database tracked for deployment.
+!/nih_awards_slim.duckdb
+
+# Reproducible environments, caches, and local exports.
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.DS_Store
+/db extracts/
+
+# Local credentials.
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml

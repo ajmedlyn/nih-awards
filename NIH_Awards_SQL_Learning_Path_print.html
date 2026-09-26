@@ -1,0 +1,821 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>NIH Awards SQL Learning Path</title><style>
+:root { color-scheme: light; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  line-height: 1.48;
+  color: #1f2933;
+  max-width: 8.1in;
+  margin: 0 auto;
+  padding: 0.45in 0.55in;
+  background: white;
+  font-size: 10.5pt;
+}
+h1, h2, h3 { color: #111827; line-height: 1.2; page-break-after: avoid; }
+h1 { font-size: 22pt; margin: 0 0 0.18in; border-bottom: 2px solid #111827; padding-bottom: 0.12in; }
+h2 { font-size: 15pt; margin-top: 0.28in; border-bottom: 1px solid #c9d2dc; padding-bottom: 0.04in; }
+h3 { font-size: 12pt; margin-top: 0.2in; }
+p { margin: 0.08in 0; }
+a { color: inherit; }
+ul, ol { margin-top: 0.06in; padding-left: 0.23in; }
+li { margin: 0.025in 0; }
+code { font-family: "SFMono-Regular", Consolas, monospace; font-size: 9.3pt; background: #f2f5f8; padding: 0.02in 0.04in; border-radius: 3px; }
+pre { background: #f7f9fb; border: 1px solid #d8e0e8; border-radius: 5px; padding: 0.1in; overflow-wrap: anywhere; white-space: pre-wrap; page-break-inside: avoid; }
+pre code { background: transparent; padding: 0; }
+table { border-collapse: collapse; width: 100%; margin: 0.1in 0 0.16in; font-size: 9.4pt; page-break-inside: avoid; }
+th, td { border: 1px solid #c9d2dc; padding: 0.045in 0.06in; vertical-align: top; }
+th { background: #eef2f6; text-align: left; }
+hr { border: 0; border-top: 1px solid #c9d2dc; margin: 0.22in 0; }
+blockquote { border-left: 3px solid #9aa8b7; padding-left: 0.1in; color: #46515d; }
+@media print {
+  body { max-width: none; margin: 0; padding: 0; font-size: 10pt; }
+  h2 { page-break-after: avoid; }
+  pre, table { page-break-inside: avoid; }
+}
+</style></head><body>
+<h1>NIH Awards Normalization and SQL Learning Path</h1>
+<p>Printable working guide for finishing the <code>nih_awards</code> normalized DuckDB model while keeping SQL skills sharp.</p>
+<p>Prepared from the local DuckDB instance on 2026-06-18.</p>
+<hr>
+<h2>1. Current Database Snapshot</h2>
+<p>Main database:</p>
+<pre><code class="language-text">nih_awards.duckdb   18 GB</code></pre>
+<p>Flight-friendly database:</p>
+<pre><code class="language-text">nih_awards_slim.duckdb   33 MB</code></pre>
+<p>Connect:</p>
+<pre><code class="language-bash">duckdb nih_awards.duckdb
+duckdb nih_awards_slim.duckdb</code></pre>
+<p>Useful shell commands:</p>
+<pre><code class="language-sql">.tables
+DESCRIBE award_fact;
+DESCRIBE nih_awards_national;
+SELECT * FROM duckdb_tables() WHERE schema_name = &#x27;main&#x27;;</code></pre>
+<h3>Main Tables</h3>
+<table>
+<thead><tr><th>Table</th><th>Approx rows</th><th>Current purpose</th></tr></thead>
+<tbody>
+<tr><td><code>nih_awards_national</code></td><td>1,936,045</td><td>Raw flattened NIH award source table</td></tr>
+<tr><td><code>award_fact</code></td><td>1,936,045</td><td>One row per award/application</td></tr>
+<tr><td><code>organizations</code></td><td>18,420</td><td>Organization dimension candidate</td></tr>
+<tr><td><code>projects</code></td><td>407,356</td><td>Project dimension candidate keyed by <code>core_project_num</code></td></tr>
+<tr><td><code>investigators</code></td><td>211,289</td><td>Investigator dimension candidate keyed by <code>profile_id</code></td></tr>
+<tr><td><code>Award_Investigators</code></td><td>2,180,014</td><td>Award-to-investigator bridge</td></tr>
+<tr><td><code>nih_institutes</code></td><td>87</td><td>NIH institute/admin IC dimension candidate</td></tr>
+<tr><td><code>project_titles_main_projects</code></td><td>478,440</td><td>Project-title history/variant bridge</td></tr>
+<tr><td><code>ucd_awards</code></td><td>19,416</td><td>UC Davis award subset</td></tr>
+<tr><td><code>_fetch_progress</code></td><td>1,539</td><td>Fetch bookkeeping</td></tr>
+</tbody>
+</table>
+<h3>Current Quality Findings</h3>
+<p>These findings should become tests.</p>
+<table>
+<thead><tr><th>Check</th><th>Current result</th><th>What it means</th></tr></thead>
+<tbody>
+<tr><td>Raw rows</td><td>1,936,045</td><td>Baseline source count</td></tr>
+<tr><td><code>award_fact</code> rows</td><td>1,936,045</td><td>Fact table currently preserves raw award grain</td></tr>
+<tr><td>Duplicate <code>award_fact.ApplicationID</code> rows</td><td>0</td><td>Good primary-key candidate</td></tr>
+<tr><td>Null <code>award_fact.ApplicationID</code></td><td>0</td><td>Good</td></tr>
+<tr><td>Null <code>award_fact.ORG_ID</code></td><td>560</td><td>Decide whether to allow null or create an unknown org row</td></tr>
+<tr><td>Organization IDs duplicated</td><td>0</td><td>Good surrogate key uniqueness</td></tr>
+<tr><td><code>award_fact</code> org orphans</td><td>0</td><td>Existing non-null org links resolve</td></tr>
+<tr><td><code>projects</code> duplicate <code>Project_ID</code> rows</td><td>0</td><td>Good</td></tr>
+<tr><td><code>projects</code> duplicate <code>core_project_num</code> rows</td><td>0</td><td>Good</td></tr>
+<tr><td>Raw rows missing <code>core_project_num</code></td><td>11</td><td>Need null-handling rule</td></tr>
+<tr><td>Raw <code>core_project_num</code> values not in <code>projects</code></td><td>21</td><td>Rebuild or refresh project dimension</td></tr>
+<tr><td><code>investigators</code> duplicate <code>profile_id</code> rows</td><td>0</td><td>Good</td></tr>
+<tr><td>Investigators likely affected by <code>NULLS FIRST</code> display-name ranking</td><td>28,720</td><td>Current script conflicts with documentation; use <code>NULLS LAST</code></td></tr>
+<tr><td>Duplicate award/profile rows in <code>Award_Investigators</code></td><td>432</td><td>Bridge table needs dedupe rule</td></tr>
+<tr><td>Award-investigator profile orphans</td><td>0</td><td>Good</td></tr>
+<tr><td>Award-investigator application orphans</td><td>0</td><td>Good</td></tr>
+<tr><td>Award fact rows without investigators</td><td>2,942</td><td>Need rule: expected source gaps vs data issue</td></tr>
+<tr><td>Awards in bridge with zero contact PI</td><td>2</td><td>Investigate</td></tr>
+<tr><td>Date strings that fail <code>TRY_CAST(... AS DATE)</code></td><td>0</td><td>Convert date text to typed <code>DATE</code> columns</td></tr>
+<tr><td><code>award_fact.IC_Code</code> values missing from <code>nih_institutes</code></td><td>0</td><td>Good</td></tr>
+</tbody>
+</table>
+<hr>
+<h2>2. Target Normalized Model</h2>
+<p>Keep the model simple and explicit. The goal is not to normalize everything into dust. The goal is to make grain, identity, and joins obvious.</p>
+<h3>Recommended Core Tables</h3>
+<table>
+<thead><tr><th>Target table</th><th>Grain</th><th>Key</th></tr></thead>
+<tbody>
+<tr><td><code>fact_award</code></td><td>One row per NIH application/award record</td><td><code>ApplicationID</code></td></tr>
+<tr><td><code>dim_organization</code></td><td>One row per stable org identity</td><td><code>organization_id</code></td></tr>
+<tr><td><code>dim_project</code></td><td>One row per <code>core_project_num</code></td><td><code>Project_ID</code></td></tr>
+<tr><td><code>dim_institute</code></td><td>One row per IC/admin institute code</td><td><code>agency_ic_admin_code</code></td></tr>
+<tr><td><code>dim_investigator</code></td><td>One row per NIH PI <code>profile_id</code></td><td><code>profile_id</code></td></tr>
+<tr><td><code>bridge_award_investigator</code></td><td>One row per application plus investigator</td><td><code>ApplicationID</code>, <code>profile_id</code></td></tr>
+<tr><td><code>bridge_project_title</code></td><td>One row per project plus observed title</td><td><code>Project_ID</code>, normalized title</td></tr>
+</tbody>
+</table>
+<h3>Possible Later Tables</h3>
+<table>
+<thead><tr><th>Table</th><th>Why it might help</th></tr></thead>
+<tbody>
+<tr><td><code>dim_activity</code></td><td>Activity codes such as R01, U01, K awards</td></tr>
+<tr><td><code>dim_award_type</code></td><td>Award type descriptions and grouping</td></tr>
+<tr><td><code>dim_org_type</code></td><td>Organization type code/name cleanup</td></tr>
+<tr><td><code>dim_study_section</code></td><td>Review study section code/name</td></tr>
+<tr><td><code>bridge_award_spending_category</code></td><td>If <code>spending_categories_json</code> becomes analytically important</td></tr>
+<tr><td><code>bridge_award_program_officer</code></td><td>If program officers become a repeated entity</td></tr>
+</tbody>
+</table>
+<h3>Fact Table Columns To Prefer</h3>
+<p>The fact should hold keys, measures, and event dates.</p>
+<p>Good fact columns:</p>
+<pre><code class="language-text">ApplicationID
+organization_id
+Project_ID
+agency_ic_admin_code
+Federal_Fiscal_Year
+activity_code
+appl_type_code
+support_year
+suffix_code
+award_notice_date
+budget_start
+budget_end
+project_start_date
+project_end_date
+direct_cost_amt
+indirect_cost_amt
+award_amount</code></pre>
+<p>Columns that probably belong outside the fact:</p>
+<pre><code class="language-text">org_name
+org_state
+org_duns
+agency_ic_admin_name
+project_title
+pi_names
+pis_json
+abstract_text
+terms
+spending_categories_json</code></pre>
+<hr>
+<h2>3. Project Completion Roadmap</h2>
+<p>Use this as the master checklist.</p>
+<h3>Phase 1: Freeze Definitions</h3>
+<ul>
+<li>Write down the grain of every normalized table.</li>
+<li>Decide naming conventions: either snake case everywhere or keep existing mixed case. Prefer snake case for new work.</li>
+<li>Decide whether target tables replace current names or live beside them as <code>dim_*</code>, <code>fact_*</code>, and <code>bridge_*</code>.</li>
+<li>Create a <code>docs/data_dictionary.md</code> or expand <code>table documentation.md</code>.</li>
+<li>Add a short ERD to the docs.</li>
+</ul>
+<p>Key decision:</p>
+<pre><code class="language-text">Do we preserve dashboard compatibility by keeping existing table names/views?
+Recommended: create new normalized tables, then compatibility views if the Streamlit app expects old names.</code></pre>
+<h3>Phase 2: Rebuild Dimensions From Raw</h3>
+<ul>
+<li>Rebuild <code>dim_institute</code> from distinct admin IC fields.</li>
+<li>Rebuild <code>dim_project</code> from all current raw rows, including the 21 missing <code>core_project_num</code> values found in the audit.</li>
+<li>Decide how to handle 11 raw rows with null <code>core_project_num</code>.</li>
+<li>Rebuild <code>dim_organization</code> and decide whether to include <code>org_city</code>, <code>org_country</code>, <code>org_uei</code>, <code>org_type_code</code>, and <code>org_type_name</code>.</li>
+<li>Rebuild <code>dim_investigator</code> using the documented display-name rule.</li>
+<li>Fix investigator display-name ordering so null <code>award_notice_date</code> values rank after real dates.</li>
+<li>Convert valid date strings into actual <code>DATE</code> columns.</li>
+</ul>
+<p>Project dimension note:</p>
+<p>The current <code>projects</code> table has 407,356 rows, but 21 non-null <code>core_project_num</code> values in raw data are not represented. That suggests the dimension was built before a later fetch or with a filter that now needs revisiting.</p>
+<p>Investigator dimension note:</p>
+<p><code>table documentation.md</code> says null award dates should rank after dated observations. The current <code>Tables/Investigators.sql</code> uses <code>af.award_notice_date DESC NULLS FIRST</code>, which selects null-dated observations ahead of dated ones. The audit found 28,720 investigator profiles where the selected row is null-dated even though that profile also has a dated award. Use <code>DESC NULLS LAST</code> when rebuilding the investigator dimension.</p>
+<h3>Phase 3: Rebuild Bridges</h3>
+<ul>
+<li>Rebuild <code>bridge_award_investigator</code> from <code>pis_json</code>.</li>
+<li>Store <code>is_contact_pi</code> as <code>BOOLEAN</code>, not text.</li>
+<li>Deduplicate <code>(ApplicationID, profile_id)</code>.</li>
+<li>Investigate the current 432 duplicate application/profile rows.</li>
+<li>Investigate the 2 awards in the bridge with zero contact PI.</li>
+<li>Decide how to document 2,942 awards with no investigator rows.</li>
+<li>Rebuild <code>bridge_project_title</code> from <code>project_title</code>, <code>Project_ID</code>, and a normalized title key.</li>
+</ul>
+<p>Useful dedupe shape:</p>
+<pre><code class="language-sql">CREATE OR REPLACE TABLE bridge_award_investigator AS
+WITH exploded AS (
+    SELECT
+        nan.appl_id AS ApplicationID,
+        json_extract_string(pi.value, &#x27;$.profile_id&#x27;) AS profile_id,
+        upper(json_extract_string(pi.value, &#x27;$.last_name&#x27;)) AS last_name,
+        upper(json_extract_string(pi.value, &#x27;$.first_name&#x27;)) AS first_name,
+        json_extract_string(pi.value, &#x27;$.is_contact_pi&#x27;)::BOOLEAN AS is_contact_pi,
+        row_number() OVER (
+            PARTITION BY
+                nan.appl_id,
+                json_extract_string(pi.value, &#x27;$.profile_id&#x27;)
+            ORDER BY
+                json_extract_string(pi.value, &#x27;$.is_contact_pi&#x27;)::BOOLEAN DESC,
+                pi.key
+        ) AS rn
+    FROM nih_awards_national nan,
+         json_each(nan.pis_json) AS pi
+    WHERE json_extract_string(pi.value, &#x27;$.profile_id&#x27;) IS NOT NULL
+)
+SELECT
+    ApplicationID,
+    profile_id,
+    last_name,
+    first_name,
+    concat_ws(&#x27;, &#x27;, last_name, first_name) AS full_name,
+    is_contact_pi
+FROM exploded
+WHERE rn = 1;</code></pre>
+<h3>Phase 4: Rebuild <code>fact_award</code></h3>
+<ul>
+<li>Include <code>Project_ID</code>, not just <code>project_num</code>.</li>
+<li>Include <code>organization_id</code>.</li>
+<li>Include <code>agency_ic_admin_code</code>.</li>
+<li>Keep additive measures: direct, indirect, total/award amount.</li>
+<li>Keep typed dates.</li>
+<li>Keep raw identifying strings only where they define award identity.</li>
+<li>Do not carry raw JSON into the fact unless there is a deliberate reason.</li>
+</ul>
+<p>Fact rebuild shape:</p>
+<pre><code class="language-sql">CREATE OR REPLACE TABLE fact_award AS
+SELECT
+    nan.appl_id AS application_id,
+    org.organization_id,
+    proj.Project_ID AS project_id,
+    nan.agency_ic_admin_code,
+    nan.fiscal_year AS federal_fiscal_year,
+    nan.project_num,
+    nan.activity_code,
+    nan.appl_type_code,
+    nan.support_year,
+    nan.suffix_code,
+    TRY_CAST(nan.award_notice_date AS DATE) AS award_notice_date,
+    TRY_CAST(nan.budget_start AS DATE) AS budget_start,
+    TRY_CAST(nan.budget_end AS DATE) AS budget_end,
+    TRY_CAST(nan.project_start_date AS DATE) AS project_start_date,
+    TRY_CAST(nan.project_end_date AS DATE) AS project_end_date,
+    nan.direct_cost_amt AS direct_cost_amt,
+    nan.indirect_cost_amt AS indirect_cost_amt,
+    nan.award_amount AS award_amount
+FROM nih_awards_national nan
+LEFT JOIN dim_organization org
+    ON nan.org_name IS NOT DISTINCT FROM org.org_name
+   AND nan.org_duns IS NOT DISTINCT FROM org.org_duns
+   AND nan.org_state IS NOT DISTINCT FROM org.org_state
+   AND nan.geo_lat IS NOT DISTINCT FROM org.geo_lat
+   AND nan.geo_lon IS NOT DISTINCT FROM org.geo_lon
+LEFT JOIN dim_project proj
+    ON nan.core_project_num = proj.core_project_num;</code></pre>
+<h3>Phase 5: Add Tests</h3>
+<p>Create a repeatable validation SQL file such as:</p>
+<pre><code class="language-text">duckdb scripts/validate_normalized_model.sql</code></pre>
+<p>Minimum tests:</p>
+<ul>
+<li>Row count: <code>fact_award</code> equals <code>nih_awards_national</code>.</li>
+<li>Uniqueness: <code>fact_award.application_id</code> has no duplicates.</li>
+<li>No orphan organization keys except approved unknown/null cases.</li>
+<li>No orphan project keys except approved null <code>core_project_num</code> cases.</li>
+<li>No orphan institute keys.</li>
+<li>No orphan bridge award keys.</li>
+<li>No orphan bridge investigator keys.</li>
+<li><code>dim_investigator.profile_id</code> is unique.</li>
+<li><code>bridge_award_investigator</code> has unique <code>(application_id, profile_id)</code>.</li>
+<li>Date conversions have zero invalid non-null values.</li>
+<li><code>is_contact_pi</code> is boolean and each award has either exactly one contact PI or a documented exception.</li>
+</ul>
+<h3>Phase 6: Make It Usable</h3>
+<ul>
+<li>Add compatibility views for current app queries if needed.</li>
+<li>Create an analytics view for common joins.</li>
+<li>Create a smaller training database or exported Parquet subset for flight/offline work.</li>
+<li>Document query examples for funding by institute, organization, PI, project, and fiscal year.</li>
+<li>Update the Streamlit app pages to use normalized tables or compatibility views.</li>
+</ul>
+<hr>
+<h2>4. SQL Practice Sets</h2>
+<p>Do these without looking at the answer hints first. Use the full DB when possible and the slim DB for quick drills.</p>
+<h3>Practice Set A: Orientation</h3>
+<p>Goal: get fast at reading an unfamiliar database.</p>
+<ol>
+<li>List every table and row estimate.</li>
+<li>Show all columns in <code>award_fact</code>.</li>
+<li>Show all columns in <code>nih_awards_national</code> that contain <code>date</code>.</li>
+<li>Count raw awards by fiscal year.</li>
+<li>Find the first and last fiscal year in the raw data.</li>
+<li>Count distinct organizations by state.</li>
+<li>Find the top 20 IC/admin institutes by total award amount.</li>
+<li>Count how many awards have null <code>award_amount</code>.</li>
+<li>Count awards by <code>activity_code</code>.</li>
+<li>Find the most recent <code>award_notice_date</code>.</li>
+</ol>
+<p>Starter:</p>
+<pre><code class="language-sql">SELECT table_name, estimated_size
+FROM duckdb_tables()
+WHERE schema_name = &#x27;main&#x27;
+ORDER BY table_name;</code></pre>
+<h3>Practice Set B: Grain And Keys</h3>
+<p>Goal: prove table grain with SQL, not vibes.</p>
+<ol>
+<li>Prove <code>award_fact</code> is one row per <code>ApplicationID</code>.</li>
+<li>Prove <code>organizations</code> is one row per <code>organization_id</code>.</li>
+<li>Test whether <code>org_duns</code> alone is a stable organization key.</li>
+<li>Test whether <code>(org_name, org_state)</code> is unique in <code>organizations</code>.</li>
+<li>Prove <code>projects</code> is one row per <code>core_project_num</code>.</li>
+<li>Find raw <code>core_project_num</code> values missing from <code>projects</code>.</li>
+<li>Count awards with null <code>core_project_num</code>.</li>
+<li>Find the most common <code>project_num</code> prefixes.</li>
+<li>Find whether <code>project_num</code> is unique in <code>award_fact</code>.</li>
+<li>Find awards whose <code>project_num</code> appears under multiple application IDs.</li>
+</ol>
+<p>Pattern:</p>
+<pre><code class="language-sql">SELECT
+    COUNT(*) AS rows,
+    COUNT(DISTINCT ApplicationID) AS distinct_ids,
+    COUNT(*) - COUNT(DISTINCT ApplicationID) AS duplicate_rows
+FROM award_fact;</code></pre>
+<h3>Practice Set C: Joins And Anti-Joins</h3>
+<p>Goal: build referential-integrity instincts.</p>
+<ol>
+<li>Count <code>award_fact</code> rows with a matching organization.</li>
+<li>Count <code>award_fact</code> rows with no organization.</li>
+<li>Count non-null org IDs in <code>award_fact</code> that do not resolve to <code>organizations</code>.</li>
+<li>Count IC codes in <code>award_fact</code> that do not resolve to <code>nih_institutes</code>.</li>
+<li>Count investigator bridge rows with no matching <code>award_fact</code>.</li>
+<li>Count investigator bridge rows with no matching <code>investigators</code>.</li>
+<li>Find awards with no investigator bridge rows.</li>
+<li>Find investigators with no award bridge rows.</li>
+<li>Find projects with no fact rows, after joining through <code>core_project_num</code>.</li>
+<li>Write one query that returns all orphan counts as rows in a test result table.</li>
+</ol>
+<p>Anti-join pattern:</p>
+<pre><code class="language-sql">SELECT COUNT(*) AS orphan_rows
+FROM child_table c
+LEFT JOIN parent_table p
+    ON c.parent_key = p.parent_key
+WHERE c.parent_key IS NOT NULL
+  AND p.parent_key IS NULL;</code></pre>
+<h3>Practice Set D: Aggregation</h3>
+<p>Goal: answer real funding questions.</p>
+<ol>
+<li>Total award amount by fiscal year.</li>
+<li>Total direct and indirect costs by fiscal year.</li>
+<li>Top 25 organizations by total award amount.</li>
+<li>Top 25 organizations by active award count.</li>
+<li>Top 25 PIs by total award amount as contact PI.</li>
+<li>Total funding by IC/admin institute and fiscal year.</li>
+<li>Percent of total annual funding by institute.</li>
+<li>Average award size by activity code.</li>
+<li>Median award size by activity code.</li>
+<li>Number of unique projects funded each fiscal year.</li>
+</ol>
+<p>Percent-of-total pattern:</p>
+<pre><code class="language-sql">WITH by_ic AS (
+    SELECT
+        Federal_Fiscal_Year,
+        IC_Code,
+        SUM(TotalCosts) AS total_costs
+    FROM award_fact
+    GROUP BY Federal_Fiscal_Year, IC_Code
+)
+SELECT
+    *,
+    total_costs
+        / SUM(total_costs) OVER (PARTITION BY Federal_Fiscal_Year)
+        AS pct_of_year
+FROM by_ic;</code></pre>
+<h3>Practice Set E: Window Functions</h3>
+<p>Goal: maintain ranking and time-series fluency.</p>
+<ol>
+<li>Rank institutes by funding within each fiscal year.</li>
+<li>Find each organization&#x27;s highest-funded fiscal year.</li>
+<li>Find each PI&#x27;s first and most recent award year.</li>
+<li>Calculate year-over-year funding change by institute.</li>
+<li>Calculate a three-year moving average of total funding by institute.</li>
+<li>Find projects whose funding increased three years in a row.</li>
+<li>Pick one display name per investigator using the latest award notice date.</li>
+<li>Find duplicate award/profile rows and keep only one.</li>
+<li>Find the top 10 awards per organization.</li>
+<li>Label each award as above or below its activity-code median.</li>
+</ol>
+<p>Display-name pattern:</p>
+<pre><code class="language-sql">WITH ranked AS (
+    SELECT
+        ai.profile_id,
+        ai.Full_Name,
+        ai.Last_Name,
+        ai.First_Name,
+        ai.ApplicationID,
+        ROW_NUMBER() OVER (
+            PARTITION BY ai.profile_id
+            ORDER BY
+                TRY_CAST(af.award_notice_date AS DATE) DESC NULLS LAST,
+                ai.ApplicationID DESC
+        ) AS name_rank
+    FROM Award_Investigators ai
+    JOIN award_fact af
+        ON ai.ApplicationID = af.ApplicationID
+)
+SELECT *
+FROM ranked
+WHERE name_rank = 1;</code></pre>
+<h3>Practice Set F: Dates</h3>
+<p>Goal: stop treating dates as strings.</p>
+<ol>
+<li>Convert <code>award_notice_date</code> to <code>DATE</code>.</li>
+<li>Count invalid non-null date strings.</li>
+<li>Count awards by award-notice month.</li>
+<li>Count awards active during federal fiscal year 2024.</li>
+<li>Count awards active on a given date.</li>
+<li>Calculate project duration in days.</li>
+<li>Find awards where <code>budget_end</code> is before <code>budget_start</code>.</li>
+<li>Find awards where <code>project_end_date</code> is before <code>project_start_date</code>.</li>
+<li>Compare award notice timing across institutes.</li>
+<li>Build a fiscal-year label from dates.</li>
+</ol>
+<p>Active-in-period pattern:</p>
+<pre><code class="language-sql">WHERE TRY_CAST(project_start_date AS DATE) &lt;= DATE &#x27;2024-09-30&#x27;
+  AND TRY_CAST(project_end_date AS DATE) &gt;= DATE &#x27;2023-10-01&#x27;</code></pre>
+<h3>Practice Set G: JSON And Bridges</h3>
+<p>Goal: get comfortable extracting repeated entities.</p>
+<ol>
+<li>Explode <code>pis_json</code> with <code>json_each</code>.</li>
+<li>Extract <code>profile_id</code>, <code>first_name</code>, <code>last_name</code>, and <code>is_contact_pi</code>.</li>
+<li>Count the number of PIs per application.</li>
+<li>Find applications with more than five PIs.</li>
+<li>Count awards with exactly one contact PI.</li>
+<li>Find awards with zero contact PI.</li>
+<li>Find awards with more than one contact PI.</li>
+<li>Build a deduplicated award-investigator bridge.</li>
+<li>Compare bridge row count before and after dedupe.</li>
+<li>Rebuild investigator display names from the bridge.</li>
+</ol>
+<p>JSON pattern:</p>
+<pre><code class="language-sql">SELECT
+    nan.appl_id,
+    pi.key,
+    json_extract_string(pi.value, &#x27;$.profile_id&#x27;) AS profile_id,
+    json_extract_string(pi.value, &#x27;$.first_name&#x27;) AS first_name,
+    json_extract_string(pi.value, &#x27;$.last_name&#x27;) AS last_name,
+    json_extract_string(pi.value, &#x27;$.is_contact_pi&#x27;)::BOOLEAN AS is_contact_pi
+FROM nih_awards_national nan,
+     json_each(nan.pis_json) AS pi
+LIMIT 25;</code></pre>
+<h3>Practice Set H: Normalization Builds</h3>
+<p>Goal: turn SQL exercises into project progress.</p>
+<ol>
+<li>Create <code>dim_institute</code>.</li>
+<li>Create <code>dim_project</code>.</li>
+<li>Create <code>dim_organization</code>.</li>
+<li>Create <code>bridge_award_investigator</code>.</li>
+<li>Create <code>dim_investigator</code>.</li>
+<li>Create <code>bridge_project_title</code>.</li>
+<li>Create <code>fact_award</code>.</li>
+<li>Add validation queries after each create.</li>
+<li>Write an analytics view that joins fact to project, org, institute, and contact PI.</li>
+<li>Compare results from the normalized view against the old raw table for three dashboard metrics.</li>
+</ol>
+<p>Build habit:</p>
+<pre><code class="language-text">CREATE TABLE
+then immediately run:
+1. row count
+2. distinct key count
+3. null key count
+4. orphan checks
+5. sample rows</code></pre>
+<hr>
+<h2>5. Mini Answer Key And Validation Queries</h2>
+<p>Use these after you attempt the exercises.</p>
+<h3>Fact Grain</h3>
+<pre><code class="language-sql">SELECT
+    COUNT(*) AS rows,
+    COUNT(DISTINCT ApplicationID) AS distinct_application_ids,
+    COUNT(*) - COUNT(DISTINCT ApplicationID) AS duplicate_rows
+FROM award_fact;</code></pre>
+<p>Expected current result:</p>
+<pre><code class="language-text">rows: 1,936,045
+distinct_application_ids: 1,936,045
+duplicate_rows: 0</code></pre>
+<h3>Missing Project Dimension Rows</h3>
+<pre><code class="language-sql">SELECT
+    core_project_num,
+    COUNT(*) AS raw_rows,
+    MIN(fiscal_year) AS first_fy,
+    MAX(fiscal_year) AS last_fy
+FROM nih_awards_national
+WHERE core_project_num IS NOT NULL
+  AND core_project_num NOT IN (
+      SELECT core_project_num FROM projects
+  )
+GROUP BY core_project_num
+ORDER BY raw_rows DESC, core_project_num;</code></pre>
+<p>Expected current finding:</p>
+<pre><code class="language-text">21 core_project_num values are missing from projects.</code></pre>
+<h3>Duplicate Award-Investigator Bridge Rows</h3>
+<pre><code class="language-sql">SELECT
+    ApplicationID,
+    profile_id,
+    Full_Name,
+    COUNT(*) AS duplicate_rows
+FROM Award_Investigators
+GROUP BY ApplicationID, profile_id, Full_Name
+HAVING COUNT(*) &gt; 1
+ORDER BY duplicate_rows DESC, ApplicationID;</code></pre>
+<p>Expected current finding:</p>
+<pre><code class="language-text">432 duplicate application/profile rows.</code></pre>
+<h3>Investigator Display-Name Null Date Check</h3>
+<pre><code class="language-sql">WITH profile_date_status AS (
+    SELECT
+        ai.profile_id,
+        MAX(CASE WHEN af.award_notice_date IS NOT NULL THEN 1 ELSE 0 END)
+            AS has_dated_award,
+        MAX(
+            CASE
+                WHEN i.ApplicationID = ai.ApplicationID
+                 AND af.award_notice_date IS NULL
+                THEN 1
+                ELSE 0
+            END
+        ) AS selected_null_dated_award
+    FROM Award_Investigators ai
+    JOIN award_fact af
+        ON ai.ApplicationID = af.ApplicationID
+    JOIN investigators i
+        ON ai.profile_id = i.profile_id
+    GROUP BY ai.profile_id
+)
+SELECT COUNT(*) AS likely_affected_by_nulls_first
+FROM profile_date_status
+WHERE selected_null_dated_award = 1
+  AND has_dated_award = 1;</code></pre>
+<p>Expected current finding:</p>
+<pre><code class="language-text">28,720 investigator profiles are likely affected by NULLS FIRST.</code></pre>
+<h3>Awards Without Investigators</h3>
+<pre><code class="language-sql">SELECT COUNT(*) AS award_fact_rows_without_investigators
+FROM award_fact af
+LEFT JOIN (
+    SELECT DISTINCT ApplicationID
+    FROM Award_Investigators
+) ai USING (ApplicationID)
+WHERE ai.ApplicationID IS NULL;</code></pre>
+<p>Expected current finding:</p>
+<pre><code class="language-text">2,942 awards have no investigator bridge rows.</code></pre>
+<h3>IC Referential Integrity</h3>
+<pre><code class="language-sql">SELECT
+    af.IC_Code,
+    COUNT(*) AS rows
+FROM award_fact af
+LEFT JOIN nih_institutes ni
+    ON af.IC_Code = ni.agency_ic_admin_code
+WHERE af.IC_Code IS NOT NULL
+  AND ni.agency_ic_admin_code IS NULL
+GROUP BY af.IC_Code
+ORDER BY rows DESC;</code></pre>
+<p>Expected current result:</p>
+<pre><code class="language-text">0 rows</code></pre>
+<h3>Date Validity</h3>
+<pre><code class="language-sql">SELECT
+    COUNT(*) FILTER (
+        WHERE award_notice_date IS NOT NULL
+          AND TRY_CAST(award_notice_date AS DATE) IS NULL
+    ) AS invalid_award_notice_dates
+FROM award_fact;</code></pre>
+<p>Expected current result:</p>
+<pre><code class="language-text">0 invalid non-null award_notice_date values.</code></pre>
+<hr>
+<h2>6. General SQL Knowledge To Retain</h2>
+<h3>Always Start With Grain</h3>
+<p>Before writing joins, say this sentence:</p>
+<pre><code class="language-text">This table has one row per ____.</code></pre>
+<p>If you cannot fill in the blank, do not trust your query yet.</p>
+<p>Examples:</p>
+<pre><code class="language-text">award_fact: one row per ApplicationID
+organizations: one row per organization_id
+investigators: one row per profile_id
+Award_Investigators: should be one row per ApplicationID plus profile_id</code></pre>
+<h3>Know Your Join Type</h3>
+<table>
+<thead><tr><th>Join</th><th>Use it when</th></tr></thead>
+<tbody>
+<tr><td><code>INNER JOIN</code></td><td>You only want rows that match on both sides</td></tr>
+<tr><td><code>LEFT JOIN</code></td><td>You want to keep all rows from the left table</td></tr>
+<tr><td>Anti-join</td><td>You want missing relationships</td></tr>
+<tr><td>Semi-join</td><td>You want rows where a related row exists</td></tr>
+</tbody>
+</table>
+<p>Anti-join:</p>
+<pre><code class="language-sql">SELECT c.*
+FROM child c
+LEFT JOIN parent p
+    ON c.parent_id = p.parent_id
+WHERE p.parent_id IS NULL;</code></pre>
+<p>Semi-join:</p>
+<pre><code class="language-sql">SELECT *
+FROM parent p
+WHERE EXISTS (
+    SELECT 1
+    FROM child c
+    WHERE c.parent_id = p.parent_id
+);</code></pre>
+<h3>Use <code>IS NOT DISTINCT FROM</code> For Nullable Natural Keys</h3>
+<p>Normal equality does not match nulls:</p>
+<pre><code class="language-sql">NULL = NULL</code></pre>
+<p>returns unknown, not true.</p>
+<p>For nullable natural-key joins, use:</p>
+<pre><code class="language-sql">a.org_duns IS NOT DISTINCT FROM b.org_duns</code></pre>
+<p>You already use this correctly in the organization join.</p>
+<h3>Prefer Typed Dates</h3>
+<p>Strings sort alphabetically. Dates sort chronologically.</p>
+<p>Good:</p>
+<pre><code class="language-sql">TRY_CAST(award_notice_date AS DATE) AS award_notice_date</code></pre>
+<p>Then use:</p>
+<pre><code class="language-sql">date_trunc(&#x27;month&#x27;, award_notice_date)</code></pre>
+<h3>Distinguish Measures From Attributes</h3>
+<p>Measures can usually be summed:</p>
+<pre><code class="language-text">award_amount
+direct_cost_amt
+indirect_cost_amt
+award_count</code></pre>
+<p>Attributes describe things:</p>
+<pre><code class="language-text">org_name
+project_title
+agency_ic_admin_name
+activity_code</code></pre>
+<p>When a dimension attribute appears in a fact table, ask whether it is there for performance, compatibility, or because the model is not finished.</p>
+<h3>Window Functions Are Post-Aggregation Tools</h3>
+<p>Common uses:</p>
+<pre><code class="language-text">ROW_NUMBER: choose one row
+RANK / DENSE_RANK: rank within groups
+LAG / LEAD: compare with prior/next row
+SUM(...) OVER: calculate totals without collapsing rows
+AVG(...) OVER: moving averages</code></pre>
+<p>Example:</p>
+<pre><code class="language-sql">SELECT
+    fiscal_year,
+    agency_ic_admin_name,
+    total_award,
+    total_award - LAG(total_award) OVER (
+        PARTITION BY agency_ic_admin_name
+        ORDER BY fiscal_year
+    ) AS yoy_change
+FROM annual_ic_funding;</code></pre>
+<h3>Normalize For Truth, Denormalize For Use</h3>
+<p>Normalized tables should make identity and relationships clean.</p>
+<p>Analytics views can make common queries pleasant:</p>
+<pre><code class="language-sql">CREATE OR REPLACE VIEW vw_award_analytics AS
+SELECT
+    af.application_id,
+    af.federal_fiscal_year,
+    af.award_amount,
+    org.org_name,
+    org.org_state,
+    proj.core_project_num,
+    inst.agency_ic_admin_abbrev,
+    inst.agency_ic_admin_name
+FROM fact_award af
+LEFT JOIN dim_organization org
+    ON af.organization_id = org.organization_id
+LEFT JOIN dim_project proj
+    ON af.project_id = proj.project_id
+LEFT JOIN dim_institute inst
+    ON af.agency_ic_admin_code = inst.agency_ic_admin_code;</code></pre>
+<p>This keeps the model clean while making app/query work easier.</p>
+<hr>
+<h2>7. DuckDB Tips</h2>
+<h3>Inspect Before You Scan</h3>
+<pre><code class="language-sql">SELECT *
+FROM duckdb_tables()
+WHERE schema_name = &#x27;main&#x27;;</code></pre>
+<pre><code class="language-sql">DESCRIBE table_name;</code></pre>
+<h3>Use <code>LIMIT</code> While Exploring</h3>
+<pre><code class="language-sql">SELECT *
+FROM nih_awards_national
+LIMIT 25;</code></pre>
+<h3>Use <code>TRY_CAST</code></h3>
+<p><code>CAST</code> fails on bad data. <code>TRY_CAST</code> returns null.</p>
+<pre><code class="language-sql">TRY_CAST(award_notice_date AS DATE)</code></pre>
+<h3>Use CTEs To Make Thought Visible</h3>
+<pre><code class="language-sql">WITH base AS (...),
+aggregated AS (...),
+ranked AS (...)
+SELECT *
+FROM ranked
+WHERE rn &lt;= 10;</code></pre>
+<p>Each CTE should have a clear reason to exist.</p>
+<h3>Save Repeatable Work</h3>
+<p>Put reusable SQL here:</p>
+<pre><code class="language-text">duckdb scripts/
+Tables/
+Practice SQL/</code></pre>
+<p>Recommended new files:</p>
+<pre><code class="language-text">duckdb scripts/build_normalized_model.sql
+duckdb scripts/validate_normalized_model.sql
+docs/data_dictionary.md
+docs/erd.md</code></pre>
+<hr>
+<h2>8. Flight Study Plan</h2>
+<h3>Session 1: Model Review, 45-60 Minutes</h3>
+<ul>
+<li>Read sections 1-3.</li>
+<li>Write the target ERD on paper.</li>
+<li>For each target table, write the grain in one sentence.</li>
+<li>Mark columns that belong in fact vs dimensions.</li>
+</ul>
+<p>Deliverable:</p>
+<pre><code class="language-text">One clean handwritten ERD and table-grain list.</code></pre>
+<h3>Session 2: SQL Warmup, 45-60 Minutes</h3>
+<ul>
+<li>Do Practice Set A.</li>
+<li>Do Practice Set B, exercises 1-6.</li>
+<li>Check answers only after writing the queries.</li>
+</ul>
+<p>Deliverable:</p>
+<pre><code class="language-text">10-15 working queries saved or written out.</code></pre>
+<h3>Session 3: Project Integrity, 60-90 Minutes</h3>
+<ul>
+<li>Do Practice Set C.</li>
+<li>Write a first draft of <code>validate_normalized_model.sql</code>.</li>
+<li>Turn each current quality finding into a test query.</li>
+</ul>
+<p>Deliverable:</p>
+<pre><code class="language-text">A validation checklist that can be run after every rebuild.</code></pre>
+<h3>Session 4: Bridge Tables, 60-90 Minutes</h3>
+<ul>
+<li>Do Practice Set G.</li>
+<li>Write a deduped <code>bridge_award_investigator</code> query.</li>
+<li>Decide the handling rule for duplicate app/profile rows.</li>
+<li>Decide the handling rule for missing contact PI cases.</li>
+</ul>
+<p>Deliverable:</p>
+<pre><code class="language-text">Bridge table SQL plus documented exception policy.</code></pre>
+<h3>Session 5: Rebuild Design, 60-90 Minutes</h3>
+<ul>
+<li>Draft SQL for <code>dim_project</code>, <code>dim_organization</code>, and <code>fact_award</code>.</li>
+<li>Add <code>Project_ID</code>/<code>project_id</code> to the fact.</li>
+<li>Convert dates to <code>DATE</code>.</li>
+<li>Write validation queries beside each create statement.</li>
+</ul>
+<p>Deliverable:</p>
+<pre><code class="language-text">First draft of build_normalized_model.sql.</code></pre>
+<h3>Session 6: Analytics Practice, 45-60 Minutes</h3>
+<ul>
+<li>Do Practice Sets D and E.</li>
+<li>Pick three dashboard metrics and write normalized-table versions.</li>
+<li>Compare mentally against raw-table versions.</li>
+</ul>
+<p>Deliverable:</p>
+<pre><code class="language-text">Three app-ready queries against the normalized model.</code></pre>
+<hr>
+<h2>9. High-Value Habits</h2>
+<h3>Before Every Query</h3>
+<p>Ask:</p>
+<pre><code class="language-text">What is the row grain of my result?
+Which table controls the row count?
+Could this join multiply rows?
+What nulls do I expect?
+What result would surprise me?</code></pre>
+<h3>After Every Query</h3>
+<p>Check:</p>
+<pre><code class="language-sql">COUNT(*)
+COUNT(DISTINCT key)
+MIN(date_column), MAX(date_column)
+SUM(amount)</code></pre>
+<p>Then sample:</p>
+<pre><code class="language-sql">SELECT *
+FROM result
+ORDER BY random()
+LIMIT 10;</code></pre>
+<h3>When A Join Looks Wrong</h3>
+<p>Debug in this order:</p>
+<ol>
+<li>Count left table.</li>
+<li>Count right table.</li>
+<li>Count distinct join keys on both sides.</li>
+<li>Count null join keys.</li>
+<li>Count duplicate join keys.</li>
+<li>Run an anti-join in both directions.</li>
+<li>Join a small filtered sample.</li>
+</ol>
+<h3>When A Dimension Feels Messy</h3>
+<p>Ask:</p>
+<pre><code class="language-text">What is the business identity?
+What is the source identity?
+What is the display label?
+Can labels change over time?
+Do I need history or just current display?</code></pre>
+<p>For investigators, you already have a good rule:</p>
+<pre><code class="language-text">profile_id defines identity.
+latest non-null award_notice_date picks display name.
+ApplicationID breaks ties.</code></pre>
+<hr>
+<h2>10. Final Project Definition Of Done</h2>
+<p>The normalized database is finished enough when:</p>
+<ul>
+<li>Every table has a documented grain.</li>
+<li>Every primary key candidate has a uniqueness test.</li>
+<li>Every foreign key relationship has an orphan test.</li>
+<li><code>fact_award</code> has one row per <code>ApplicationID</code>.</li>
+<li><code>fact_award</code> includes <code>organization_id</code>, <code>project_id</code>, and <code>agency_ic_admin_code</code>.</li>
+<li>Date columns needed for analysis are stored as <code>DATE</code>.</li>
+<li><code>bridge_award_investigator</code> has one row per <code>(application_id, profile_id)</code>.</li>
+<li><code>dim_investigator</code> has one row per <code>profile_id</code>.</li>
+<li>Missing/exception cases are documented.</li>
+<li>Current dashboard queries either work through compatibility views or have been migrated.</li>
+<li>Validation SQL can be rerun after refreshes.</li>
+<li>The slim/training DB can be regenerated.</li>
+</ul>
+<p>If you can run the validation script after a data refresh and explain each exception without anxiety, the model is in good shape.</p>
+</body></html>
