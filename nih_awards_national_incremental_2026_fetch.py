@@ -24,6 +24,7 @@ Options (edit constants below):
 from datetime import datetime
 import argparse
 import json
+import sys
 import time
 import requests
 import duckdb
@@ -443,14 +444,17 @@ def main():
     print(f"DONE. Total rows in {TABLE_NAME}: {row_count:,}")
     for fy, n, tc in fy_breakdown:
         print(f"  FY{fy}: {n:,} rows  |  ${tc or 0:,.0f} total cost (main awards, all agencies)")
-    check_completeness(con)
+    missing = check_completeness(con)
     print(f"\nOpen {DB_PATH} in DBeaver.")
     con.close()
+    return missing
 
 
-def check_completeness(con):
-    """Compare each fiscal year's row count with NIH's total; a gap means some batch missed awards."""
+def check_completeness(con) -> int:
+    """Compare each fiscal year's row count with NIH's total; a gap means some batch missed awards.
+    Returns the number of missing awards across the refreshed years."""
     print("\nCompleteness check (NIH total vs rows in table):")
+    total_missing = 0
     for fy in FISCAL_YEARS:
         try:
             nih_total = api_total({"fiscal_years": [fy]})
@@ -461,8 +465,14 @@ def check_completeness(con):
         missing = max(nih_total - have, 0)
         flag    = "" if missing == 0 else "   <-- missing awards"
         print(f"  FY{fy}: NIH {nih_total:,} | table {have:,} | missing {missing:,}{flag}")
+        total_missing += missing
         time.sleep(REQUEST_DELAY)
+    return total_missing
 
+
+EXIT_MISSING_AWARDS = 2   # data was saved, but the completeness check found a gap
 
 if __name__ == "__main__":
-    main()
+    if main() > 0:
+        print("\nFetch saved its data, but some awards are missing (see above).")
+        sys.exit(EXIT_MISSING_AWARDS)

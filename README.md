@@ -46,7 +46,7 @@ The SQL in `Tables/` uses plain table names, so it works with any file name.
 python refresh_and_normalize.py
 ```
 
-This runs the incremental fetch, then rebuilds the normalized tables in `Tables/` in one transaction, then prints row counts and a date check. If the fetch fails (NIH down for 15 tries in a row), it stops before rebuilding. If any SQL script fails, every normalized table rolls back to its previous version. Use `--skip-fetch` to rebuild the tables only.
+This runs the incremental fetch, then rebuilds the normalized tables in `Tables/` in one transaction, then prints row counts and a date check. If the fetch fails (NIH down for 15 tries in a row), or its completeness check finds missing awards, it stops before rebuilding. If any SQL script fails, or the rebuilt tables fail the row-count and duplicate-key checks, every normalized table rolls back to its previous version. Use `--skip-fetch` to rebuild the tables only.
 
 On the local/work copy, add `--with-text`: the fetch also downloads abstracts and public-health text, and the chain builds `award_text`. The cloud copy runs without it, so it stays text-free.
 

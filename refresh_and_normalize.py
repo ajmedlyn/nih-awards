@@ -2,10 +2,13 @@
 NIH awards — refresh, then rebuild the normalized tables
 --------------------------------------------------------
 Step 1 (fetch):     runs nih_awards_national_incremental_2026_fetch.py.
-                    If it fails (nonzero exit), stop here: the normalized
-                    tables keep their last good version.
+                    If it fails, or its completeness check finds missing
+                    awards, stop here: the normalized tables keep their
+                    last good version.
 Step 2 (normalize): runs the Tables/ SQL in build order, all in one
-                    transaction. If any script fails, every table rolls back.
+                    transaction, then checks that award_fact matches the
+                    source row count and that no table has duplicate keys.
+                    If a script or a check fails, every table rolls back.
 Step 3 (check):     prints row counts and counts source dates TRY_CAST lost
                     (expected 0; a warning, not a failure).
 
@@ -47,6 +50,20 @@ TEXT_BUILD = [
     ("AwardText.sql",                "award_text"),
 ]
 
+# Each table's key (its grain). A rebuild that produces duplicates is rolled back.
+TABLE_KEYS = {
+    "organizations":                "organization_id",
+    "projects":                     "core_project_num",
+    "award_fact":                   "ApplicationID",
+    "Award_Investigators":          "ApplicationID, profile_id",
+    "investigators":                "profile_id",
+    "award_ic_funding":             "ApplicationID, IC_Code",
+    "award_spending_categories":    "ApplicationID, Spending_Category_ID",
+    "spending_categories":          "Spending_Category_ID",
+    "project_titles_main_projects": "Project_ID, project_title",
+    "award_text":                   "ApplicationID",
+}
+
 DATE_COLUMNS = ["award_notice_date", "budget_start", "budget_end",
                 "project_start_date", "project_end_date"]
 
@@ -62,6 +79,10 @@ def run_fetch(with_text: bool, db_path: str) -> bool:
     log("STEP 1: fetch")
     # The fetch picks its database from NIH_AWARDS_DB, so pass --db through.
     result = subprocess.run(command, cwd=PROJECT_DIR, env={**os.environ, "NIH_AWARDS_DB": db_path})
+    if result.returncode == 2:   # EXIT_MISSING_AWARDS in the fetch script
+        log("Fetch finished, but its completeness check found MISSING AWARDS. Normalized tables not rebuilt.")
+        log("Run again to retry the fetch, or use --skip-fetch to rebuild from what was saved.")
+        return False
     if result.returncode != 0:
         log(f"Fetch FAILED (exit code {result.returncode}). Normalized tables not rebuilt.")
         return False
@@ -81,9 +102,37 @@ def run_normalize(con, build: list) -> bool:
             log(f"Normalize FAILED on {filename}: {e}")
             log("Rolled back. All normalized tables keep their previous version.")
             return False
+    problems = integrity_problems(con, build)
+    if problems:
+        con.execute("ROLLBACK")
+        for problem in problems:
+            log(f"Integrity check FAILED: {problem}")
+        log("Rolled back. All normalized tables keep their previous version.")
+        return False
     con.execute("COMMIT")
-    log("Normalize finished.")
+    log("Normalize finished (row count and key checks passed).")
     return True
+
+
+def integrity_problems(con, build: list) -> list:
+    """Check the freshly built tables before they are committed.
+    Returns a list of problems; an empty list means all checks passed."""
+    problems = []
+    source, facts = con.execute(
+        "SELECT (SELECT COUNT(*) FROM nih_awards_national), (SELECT COUNT(*) FROM award_fact)"
+    ).fetchone()
+    if source != facts:
+        problems.append(f"award_fact has {facts:,} rows but nih_awards_national has {source:,}")
+    for _, table in build:
+        key = TABLE_KEYS.get(table)
+        if key is None:
+            continue
+        duplicates = con.execute(
+            f'SELECT COUNT(*) FROM (SELECT 1 FROM "{table}" GROUP BY {key} HAVING COUNT(*) > 1)'
+        ).fetchone()[0]
+        if duplicates:
+            problems.append(f"{table} has {duplicates:,} duplicated keys ({key})")
+    return problems
 
 
 def run_checks(con, build: list):
