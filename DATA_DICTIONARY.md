@@ -18,6 +18,8 @@ WHERE agency_code = 'NIH' AND NOT is_subproject
 GROUP BY 1 ORDER BY 1;
 ```
 
+**The latest fiscal year is short until NIH posts intramural records.** RePORTER had zero intramural (`IM`) records for FY2026 as of 2026-11-16, against $5.07B in FY2025. The incremental refresh picks them up once posted. Until then, compare the latest year on extramural awards only (`mechanism_code_dc <> 'IM'` in `nih_awards_national`, or join to it from `award_fact`).
+
 Counting *awards* (rows) is different: count main awards (`NOT is_subproject`) to count projects funded, or all rows to count components.
 
 ---
@@ -379,6 +381,8 @@ Bookkeeping for the fetchers' resume mode. One row per batch, keyed `<label>_<fi
 | `org_city`, `org_country`, `org_uei` empty on rows fetched before 2026-11-16 | Can't filter by city/country on older rows | Fixed for new fetches; old rows need a full re-pull |
 | `project_serial_num` always empty | — | Field not requested; use `serial_num` |
 | ~6% of rows are non-NIH agencies | Inflates "NIH" totals unless filtered | Filter `agency_code = 'NIH'` |
+| Intramural records for the latest fiscal year are posted late (FY2026: 0 as of 2026-11-16) | Latest year looks ~$5B short | Fills in on later incremental runs; compare extramural only meanwhile |
+| FY2026 new awards average ~$550K vs ~$820K in FY2025, with ~4,100 fewer continuations | Year-over-year grant dollars may shift between years | Consistent with NIH paying some awards' later years up front (unverified); compare counts as well as dollars |
 | Subproject amounts repeat money already in the parent award | Dollar totals ~10% high if not filtered | Filter `NOT is_subproject`; see "Counting dollars" |
 | 92 awards where `award_ic_funding` doesn't sum to `TotalCosts`; 45 with IC rows but NULL `TotalCosts` | Small institute/award mismatches | NIH source errors; documented in `table documentation.md` |
 | FY2026 spending categories not yet published | Category questions empty for FY2026 | Fills in as NIH assigns them; the incremental re-pulls the prior year |
