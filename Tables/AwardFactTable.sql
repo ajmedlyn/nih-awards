@@ -28,12 +28,12 @@ SELECT
     aw.appl_type_code,
     aw.support_year,
     aw.suffix_code
-FROM nih_awards.main.nih_awards_national aw	
-LEFT JOIN nih_awards.main.organizations o 
+FROM nih_awards_national aw	
+LEFT JOIN organizations o 
     ON aw.org_name IS NOT DISTINCT FROM o.org_name
     AND aw.geo_lat IS NOT DISTINCT FROM o.geo_lat 
     AND aw.geo_lon IS NOT DISTINCT FROM o.geo_lon 
     AND aw.org_duns IS NOT DISTINCT FROM o.org_duns 
     AND aw.org_state IS NOT DISTINCT FROM o.org_state
-LEFT JOIN nih_awards.main.projects p
+LEFT JOIN projects p
 	ON aw.core_project_num = p.core_project_num;

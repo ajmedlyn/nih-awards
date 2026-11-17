@@ -22,9 +22,9 @@ import argparse
 import subprocess
 import sys
 import duckdb
+from db_config import DB_PATH   # set NIH_AWARDS_DB to use another file
 
 PROJECT_DIR  = Path(__file__).resolve().parent
-DB_PATH      = PROJECT_DIR / "nih_awards.duckdb"
 FETCH_SCRIPT = PROJECT_DIR / "nih_awards_national_incremental_2026_fetch.py"
 TABLES_DIR   = PROJECT_DIR / "Tables"
 

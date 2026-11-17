@@ -9,5 +9,5 @@ SELECT
 	CAST(json_extract_string(ic.value, '$.total_cost') AS DOUBLE) AS IC_TotalCost,
 	CAST(json_extract_string(ic.value, '$.direct_cost_ic') AS DOUBLE) AS IC_DirectCost,
 	CAST(json_extract_string(ic.value, '$.indirect_cost_ic') AS DOUBLE) AS IC_InDirectCost
-FROM nih_awards.main.nih_awards_national nan, 
+FROM nih_awards_national nan, 
 	json_each(nan.agency_ic_fundings_json) AS IC

@@ -16,7 +16,7 @@ Usage:
 
 Options (edit constants below):
     --include-text       — opt in to abstracts, public-health text and terms
-    DB_PATH              — path to your DuckDB file
+    DB_PATH              — DuckDB file; set via NIH_AWARDS_DB (see db_config.py)
     RESUME               — set True to skip FY2026+ batches already refreshed
 """
 from datetime import datetime
@@ -26,10 +26,11 @@ import time
 import requests
 import duckdb
 from award_text import TEXT_API_FIELDS, upsert_records
+import db_config
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-DB_PATH           = "nih_awards.duckdb"   # same file, separate table
+DB_PATH           = str(db_config.DB_PATH)   # set NIH_AWARDS_DB to use another file
 TABLE_NAME        = "nih_awards_national"
 _today            = datetime.now()
 CURRENT_FY        = _today.year + (1 if _today.month >= 10 else 0)   # NIH FY starts Oct 1

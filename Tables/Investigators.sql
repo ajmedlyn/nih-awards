@@ -12,8 +12,8 @@ WITH cte AS(
 				af.award_notice_date DESC NULLS LAST,
 				ai.ApplicationID DESC
 				) AS name_rank
-		FROM nih_awards.main.award_fact af 
-		INNER JOIN nih_awards.main.Award_Investigators ai 
+		FROM award_fact af 
+		INNER JOIN Award_Investigators ai 
 			ON ai.ApplicationID = af.ApplicationID 
 			)
 SELECT 

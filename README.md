@@ -9,6 +9,7 @@ NIH award data from the [NIH RePORTER API](https://api.reporter.nih.gov), loaded
 | `nih_awards_national_fetch.py` | Historical pull of every NIH award, FY2000–FY2026, batched by state and fiscal year |
 | `refresh_and_normalize.py` | Runs the incremental fetch, then rebuilds the normalized tables (stops if the fetch fails) |
 | `nih_awards_national_incremental_2026_fetch.py` | Incremental refresh of the prior and current fiscal years (upsert by `appl_id`) |
+| `db_config.py` | Which DuckDB file the scripts use (`NIH_AWARDS_DB`) |
 | `award_text.py` | Shared upsert logic and the abstract / terms text fields |
 | `Tables/` | SQL that builds the normalized schema from `nih_awards_national` |
 | `table documentation.md` | Build order and rules for the normalized tables |
@@ -23,6 +24,20 @@ python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 ```
+
+### Database file name
+
+Scripts use `nih_awards.duckdb` in the project folder by default. To use a different file on a machine, set the `NIH_AWARDS_DB` environment variable (see `db_config.py`):
+
+```bash
+export NIH_AWARDS_DB=big_dawg.duckdb      # macOS/Linux: add to ~/.zshrc to keep it
+```
+
+```bat
+setx NIH_AWARDS_DB big_dawg.duckdb        :: Windows: applies to new terminals
+```
+
+The SQL in `Tables/` uses plain table names, so it works with any file name.
 
 ## Refreshing the data
 
