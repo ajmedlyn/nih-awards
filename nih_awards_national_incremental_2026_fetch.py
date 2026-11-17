@@ -31,10 +31,13 @@ from award_text import TEXT_API_FIELDS, upsert_records
 
 DB_PATH           = "nih_awards.duckdb"   # same file, separate table
 TABLE_NAME        = "nih_awards_national"
-START_FISCAL_YEAR = 2026
-FISCAL_YEARS      = list(range(START_FISCAL_YEAR, datetime.now().year + 1))
+_today            = datetime.now()
+CURRENT_FY        = _today.year + (1 if _today.month >= 10 else 0)   # NIH FY starts Oct 1
+START_FISCAL_YEAR = CURRENT_FY - 1   # re-pull last FY: NIH backfills fields like spending categories
+FISCAL_YEARS      = list(range(START_FISCAL_YEAR, CURRENT_FY + 1))
 PAGE_SIZE         = 500
 REQUEST_DELAY     = 1.1                   # seconds between requests (NIH policy)
+MAX_RETRIES       = 15                    # give up on a page after this many failed requests
 INCLUDE_TEXT_FIELDS = False              # opt in with --include-text
 RESUME            = False                 # False = refresh FY2026+ batches each run
 
@@ -267,6 +270,7 @@ def fetch_batch(con, state_or_none: str | None, fy: int, label: str):
     offset      = 0
     total_seen  = 0
     page_count  = 0
+    failures    = 0
 
     while True:
         payload = {
@@ -281,9 +285,17 @@ def fetch_batch(con, state_or_none: str | None, fy: int, label: str):
             resp.raise_for_status()
             data = resp.json()
         except Exception as e:
-            print(f"  ERROR on [{label} FY{fy}] offset {offset}: {e} — retrying in 5s")
+            failures += 1
+            if failures >= MAX_RETRIES:
+                # Fail loudly: a nonzero exit stops refresh_and_normalize.py
+                # before it rebuilds tables from a half-refreshed source.
+                raise RuntimeError(
+                    f"Giving up on [{label} FY{fy}] offset {offset} after {failures} tries"
+                ) from e
+            print(f"  ERROR on [{label} FY{fy}] offset {offset}: {e} — retry {failures}/{MAX_RETRIES} in 5s")
             time.sleep(5)
             continue
+        failures = 0
 
         total     = data.get("meta", {}).get("total", 0)
         results   = data.get("results", [])

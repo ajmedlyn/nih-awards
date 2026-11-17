@@ -1,7 +1,8 @@
 """
 NIH RePORTER — National Award Data Fetcher
 -------------------------------------------
-Pulls ALL NIH awards for FY2024 and FY2025 into a separate DuckDB table.
+Pulls ALL NIH awards for FY2000-FY2026 (fixed history) into a separate DuckDB
+table. Newer years are handled by nih_awards_national_incremental_2026_fetch.py.
 
 Strategy: batch by state/territory to stay under the API's 14,999-record
 offset cap. Also fetches a catch-all batch for non-US / no-state records.
@@ -29,9 +30,10 @@ from award_text import TEXT_API_FIELDS, upsert_records
 
 DB_PATH           = "nih_awards.duckdb"   # same file, separate table
 TABLE_NAME        = "nih_awards_national"
-FISCAL_YEARS      = list(range(2001, datetime.now().year + 1))
+FISCAL_YEARS      = list(range(2000, 2026 + 1))   # history; incremental covers the rolling recent years
 PAGE_SIZE         = 500
 REQUEST_DELAY     = 1.1                   # seconds between requests (NIH policy)
+MAX_RETRIES       = 15                    # give up on a page after this many failed requests
 INCLUDE_TEXT_FIELDS = False              # opt in with --include-text
 RESUME            = True                  # skip state+FY combos already in DB
 
@@ -254,6 +256,7 @@ def fetch_batch(con, state_or_none: str | None, fy: int, label: str):
     offset      = 0
     total_seen  = 0
     page_count  = 0
+    failures    = 0
 
     while True:
         payload = {
@@ -268,9 +271,16 @@ def fetch_batch(con, state_or_none: str | None, fy: int, label: str):
             resp.raise_for_status()
             data = resp.json()
         except Exception as e:
-            print(f"  ERROR on [{label} FY{fy}] offset {offset}: {e} — retrying in 5s")
+            failures += 1
+            if failures >= MAX_RETRIES:
+                # Fail loudly rather than retry forever or mark the batch complete.
+                raise RuntimeError(
+                    f"Giving up on [{label} FY{fy}] offset {offset} after {failures} tries"
+                ) from e
+            print(f"  ERROR on [{label} FY{fy}] offset {offset}: {e} — retry {failures}/{MAX_RETRIES} in 5s")
             time.sleep(5)
             continue
+        failures = 0
 
         total     = data.get("meta", {}).get("total", 0)
         results   = data.get("results", [])

@@ -13,7 +13,12 @@ created by earlier ones.
 5. Investigators.sql              -> investigators (uses award_fact, Award_Investigators)
 6. IC_FundingTable.sql            -> award_ic_funding
 7. SpendingCategories.sql         -> award_spending_categories
-8. MainProjectTitles.sql          -> project_titles_main_projects (uses projects)
+8. SpendingCategoryLookup.sql     -> spending_categories (ID -> name lookup)
+9. MainProjectTitles.sql          -> project_titles_main_projects (uses projects)
+10. AwardText.sql                 -> award_text (local/work copy only, --with-text)
+
+refresh_and_normalize.py runs these in this order in one transaction, after
+the incremental fetch succeeds. Keep its BUILD_ORDER in sync with this list.
 
 If organizations or projects is rebuilt, award_fact must be rebuilt after it.
 
@@ -76,9 +81,11 @@ Award spending categories table grain:
 One row per ApplicationID per Spending_Category_ID.
 ~1.14M awards have at least one category. Verified: no duplicates, no null IDs.
 
-Follow-up:
-The source only contains category IDs (NIH RCDC categories). A lookup table
-with category names is not built yet.
+Category names:
+The source stores category IDs in spending_categories_json and names in
+spending_categories_desc. SpendingCategoryLookup.sql pairs them into
+spending_categories (one row per Spending_Category_ID), keeping the name from
+the most recent fiscal year.
 
 
 Award investigators table grain:
@@ -117,3 +124,12 @@ The investigators table stores only the selected display name.
 Missing IDs:
 PI JSON objects with null profile_id and blank names are excluded from
 award_investigators and investigators.
+
+
+Award text table grain:
+One row per ApplicationID that has an abstract or public health relevance text.
+Built only on the local/work copy (refresh_and_normalize.py --with-text); the
+cloud copy skips it for space. terms and pref_terms are not included.
+Abstracts repeat across continuation years of a project (about 1.54M main-project
+applications share about 631K distinct abstracts). Deduplicating into an
+abstracts table plus a mapping table is a later option if disk gets tight.
