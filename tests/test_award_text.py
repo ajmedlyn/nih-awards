@@ -103,6 +103,27 @@ class ArchiveTests(unittest.TestCase):
             archive_text(self.db, self.output)
         self.assertTrue(Path(original["file"]).exists())
 
+    def test_in_use_snapshot_is_skipped_then_retired(self):
+        first = Path(archive_text(self.db, self.output, keep=1)["file"])
+        real_unlink = Path.unlink
+        def windows_unlink(path, *args, **kwargs):
+            if path == first:
+                raise PermissionError("in use by another process")   # what Windows does
+            return real_unlink(path, *args, **kwargs)
+        with patch.object(Path, "unlink", windows_unlink):
+            result = archive_text(self.db, self.output, keep=1)
+        self.assertEqual(result["in_use_not_retired"], [first.name])
+        self.assertTrue(first.exists() and first.with_suffix(".json").exists())
+        later = archive_text(self.db, self.output, keep=1)
+        self.assertIn(first.name, later["retired"])
+        self.assertEqual(len(list(self.output.glob("award-text-*.parquet"))), 1)
+
+    def test_concurrent_export_is_refused(self):
+        self.output.mkdir()
+        with award_text_archive.export_lock(self.output / ".archive.lock"):
+            with self.assertRaises(OSError):
+                archive_text(self.db, self.output)
+
 
 if __name__ == "__main__":
     unittest.main()

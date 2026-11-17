@@ -4,8 +4,8 @@ This is an export, not a destructive database migration. Source text is retained
 """
 
 import argparse
+from contextlib import contextmanager
 from datetime import datetime, timezone
-import fcntl
 import json
 import os
 from pathlib import Path
@@ -15,6 +15,13 @@ import uuid
 
 import duckdb
 from award_text import TEXT_COLUMNS
+import db_config
+
+try:
+    import fcntl                     # macOS / Linux
+except ImportError:                  # Windows
+    fcntl = None
+    import msvcrt
 
 ROOT = Path(__file__).resolve().parent
 SNAPSHOT = re.compile(r"award-text-\d{8}T\d{12}Z-[a-f0-9]{8}\.json")
@@ -41,6 +48,29 @@ def fingerprint(con, relation):
     ).fetchone())
 
 
+@contextmanager
+def export_lock(path):
+    """Exclusive, non-blocking lock so two exports never race. Raises OSError if held."""
+    with path.open("a+") as handle:
+        if fcntl:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)   # released when the file closes
+            yield
+            return
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        try:
+            yield
+        finally:
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+def fsync_file(path):
+    # Windows can only flush a file opened for writing; "ab" writes nothing.
+    with path.open("ab") as handle:
+        os.fsync(handle.fileno())
+
+
 def write_json(path, value):
     pending = path.with_suffix(path.suffix + ".partial")
     with pending.open("x") as handle:
@@ -58,8 +88,7 @@ def archive_text(db_path, output_dir, table="nih_awards_national", keep=5):
     output_dir.mkdir(parents=True, exist_ok=True)
     source = {"database": str(db_path), "table": table}
     # Prevent exports / retention operations from racing each other.
-    with (output_dir / ".archive.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with export_lock(output_dir / ".archive.lock"):
         snapshots = []
         for path in sorted(output_dir.glob("award-text-*.json")):
             if not SNAPSHOT.fullmatch(path.name):
@@ -103,8 +132,7 @@ def archive_text(db_path, output_dir, table="nih_awards_national", keep=5):
             if actual != expected:
                 raise ValueError("Parquet verification failed; existing snapshots are unchanged.")
             con.execute("COMMIT")
-            with pending.open("rb") as handle:
-                os.fsync(handle.fileno())
+            fsync_file(pending)
             os.replace(pending, parquet)
             pending = None
             metadata = {"format": FORMAT, "source": source, "file": parquet.name,
@@ -116,17 +144,24 @@ def archive_text(db_path, output_dir, table="nih_awards_national", keep=5):
             write_json(output_dir / "latest.json", metadata)
             snapshots.append((manifest, metadata))
             # Only retire files created by this exporter, after verifying the replacement.
-            retired = []
+            retired, in_use = [], []
             for old, info in snapshots[:-keep]:
                 old_parquet = old.with_suffix(".parquet")
                 if old.is_symlink() or old_parquet.is_symlink():
                     raise ValueError("Refusing to rotate symbolic links.")
-                old_parquet.unlink()
+                try:
+                    # Parquet first: on Windows a snapshot open in DBeaver can't be deleted.
+                    # Skip it (manifest kept) and the next export retires it.
+                    old_parquet.unlink()
+                except PermissionError:
+                    in_use.append(info["file"])
+                    continue
                 old.unlink()
                 retired.append(info["file"])
             return {"file": str(parquet), "rows": expected[0], "rows_with_text": expected[1],
                     "GiB": round(metadata["bytes"] / 1024**3, 3),
-                    "retained_snapshots": min(len(snapshots), keep), "retired": retired}
+                    "retained_snapshots": min(len(snapshots), keep) + len(in_use),
+                    "retired": retired, "in_use_not_retired": in_use}
         finally:
             con.close()
             if pending is not None and pending.exists():
@@ -135,7 +170,7 @@ def archive_text(db_path, output_dir, table="nih_awards_national", keep=5):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db", type=Path, default=ROOT / "nih_awards.duckdb")
+    parser.add_argument("--db", type=Path, default=db_config.DB_PATH)
     parser.add_argument("--output-dir", type=Path, default=ROOT / "data/award_text")
     parser.add_argument("--table", default="nih_awards_national")
     parser.add_argument("--keep", type=int, choices=range(1, 6), default=5)
