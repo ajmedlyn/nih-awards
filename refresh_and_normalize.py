@@ -147,6 +147,23 @@ def run_checks(con, build: list):
         """).fetchone()[0]
         flag = "" if lost == 0 else "   <-- WARNING: dates lost to TRY_CAST"
         log(f"  {column:<30} {lost:>12,} lost dates{flag}")
+    check_award_text(con, rebuilt=any(table == "award_text" for _, table in build))
+
+
+def check_award_text(con, rebuilt: bool):
+    """Warn when award_text exists but this run did not rebuild it and it has fallen behind."""
+    exists = con.execute(
+        "SELECT COUNT(*) FROM duckdb_tables() WHERE table_name = 'award_text'"
+    ).fetchone()[0]
+    if rebuilt or not exists:
+        return
+    behind = con.execute("""
+        SELECT COUNT(*) FROM nih_awards_national nan
+        WHERE (nan.abstract_text IS NOT NULL OR nan.phr_text IS NOT NULL)
+          AND NOT EXISTS (SELECT 1 FROM award_text t WHERE t.ApplicationID = nan.appl_id)
+    """).fetchone()[0]
+    flag = "" if behind == 0 else "   <-- WARNING: award_text not rebuilt; rerun with --with-text"
+    log(f"  {'award_text (not rebuilt)':<30} {behind:>12,} awards with text missing{flag}")
 
 
 def main() -> int:
@@ -158,6 +175,8 @@ def main() -> int:
                         help="Fetch abstracts/PHR text and build award_text (local/work copy only).")
     parser.add_argument("--db", default=str(DB_PATH), help=argparse.SUPPRESS)  # for testing on a copy
     args = parser.parse_args()
+    # Full path, so the fetch (which runs from the project folder) uses the same file.
+    args.db = str(Path(args.db).resolve())
 
     log(f"Database: {args.db}")
     require_existing_db(args.db)

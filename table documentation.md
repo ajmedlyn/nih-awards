@@ -43,8 +43,8 @@ the same on every rebuild of the same data. New organizations can shift IDs,
 so do not store organization_id outside this database.
 
 Excluded rows:
-Records with both org_name and org_duns null are excluded. 562 award_fact
-rows have no ORG_ID for this reason.
+Records with both org_name and org_duns null are excluded. 2,655 award_fact
+rows have no ORG_ID for this reason (as of 2026-11-16).
 
 
 Projects table grain:
@@ -52,8 +52,9 @@ One row per core_project_num.
 
 Subprojects:
 Only non-subproject records (subproject_id is null) are used to build projects.
-146 award_fact rows have no Project_ID: 11 have no core_project_num, and 135
-are subprojects whose core project has no main (non-subproject) record.
+72 award_fact rows have no Project_ID (as of 2026-11-16): 29 have no
+core_project_num, and 43 are subprojects whose core project has no main
+(non-subproject) record.
 Known gap, accepted for MVP.
 
 
