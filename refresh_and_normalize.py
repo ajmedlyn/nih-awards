@@ -1,7 +1,9 @@
 """
 NIH awards — refresh, then rebuild the normalized tables
 --------------------------------------------------------
-Step 1 (fetch):     runs nih_awards_national_incremental_2026_fetch.py.
+Step 1 (fetch):     runs nih_awards_national_incremental_2026_fetch.py, which
+                    stages pages in a local file and merges them into the
+                    database in one transaction at the end.
                     If it fails, or its completeness check finds missing
                     awards, stop here: the normalized tables keep their
                     last good version.

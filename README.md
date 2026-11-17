@@ -64,6 +64,9 @@ Add `--include-text` to also refresh abstracts, public-health text and terms.
 - The fiscal year follows NIH's calendar (it starts October 1). The script re-pulls last fiscal year too, because NIH backfills fields such as spending categories after the year closes.
 - NIH asks for no more than 1 request per second; the script waits 1.1 seconds between requests. For large pulls, NIH also asks that you run between 9 PM and 5 AM Eastern.
 - DuckDB allows one writer. Close Streamlit and any open DuckDB sessions first.
+- The incremental fetch writes each page to a local staging file (your temp folder, or `NIH_AWARDS_STAGING`) and merges it into the database in one transaction at the end. The database can live on a network share without hundreds of slow writes over the network, and the main file is only locked during the merge and rebuild. If a run dies, the next run merges the leftover staging file first.
+- **Shared database rule:** nobody opens the shared `.duckdb` file (DBeaver, Python, Streamlit) while a refresh runs. DuckDB's locking is unreliable on network drives, and two writers can damage the file.
+- Don't schedule refreshes on Saturdays: NIH posts its weekly batch of new awards then, and a run overlapping it can report missing awards.
 
 The normalized table build order is in `table documentation.md`.
 

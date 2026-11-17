@@ -22,13 +22,16 @@ Options (edit constants below):
     RESUME               — set True to skip FY2026+ batches already refreshed
 """
 from datetime import datetime
+from pathlib import Path
 import argparse
 import json
+import os
 import sys
+import tempfile
 import time
 import requests
 import duckdb
-from award_text import TEXT_API_FIELDS, upsert_records
+from award_text import TEXT_API_FIELDS, TEXT_COLUMNS, upsert_records
 import db_config
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -44,6 +47,12 @@ REQUEST_DELAY     = 1.1                   # seconds between requests (NIH policy
 MAX_RETRIES       = 15                    # give up on a page after this many failed requests
 INCLUDE_TEXT_FIELDS = False              # opt in with --include-text
 RESUME            = False                 # False = refresh FY2026+ batches each run
+
+# Pages are fetched into a local staging file, then merged into DB_PATH in one
+# transaction. The main database may live on a network share, where hundreds of
+# small writes are slow and a dropped connection mid-write can damage it.
+STAGING_DIR       = Path(os.environ.get("NIH_AWARDS_STAGING", tempfile.gettempdir()))
+STAGING_PATH      = STAGING_DIR / f"{Path(DB_PATH).stem}_staging.duckdb"
 
 API_URL = "https://api.reporter.nih.gov/v2/projects/search"
 
@@ -248,15 +257,6 @@ def mark_progress(con, key: str, total: int, fetched: int, completed: bool):
     """, [key, total, fetched, completed])
 
 
-def clear_refresh_progress(con):
-    """Let incremental runs refresh FY2026+ batches even if a prior run completed."""
-    if RESUME:
-        return
-
-    keys = [batch_key(label, fy) for fy in FISCAL_YEARS for label, _ in batches_for_year()]
-    con.executemany("DELETE FROM _fetch_progress WHERE batch_key = ?", [(key,) for key in keys])
-
-
 def batches_for_year() -> list[tuple[str, object]]:
     """(label, extra criteria) for every batch in one fiscal year.
     Criteria can be a function of the fiscal year, called only if the batch runs."""
@@ -414,10 +414,11 @@ def main():
     print("=" * 65)
 
     db_config.require_existing_db(DB_PATH)   # never refresh a new, empty file
-    con = duckdb.connect(DB_PATH)
-    con.execute(DDL)
-    con.execute(PROGRESS_DDL)
-    clear_refresh_progress(con)
+    if STAGING_PATH.exists():
+        print(f"Merging staged rows left by an interrupted run: {STAGING_PATH}")
+        merge_staging(DB_PATH, STAGING_PATH)
+    print(f"Staging pages locally in {STAGING_PATH}")
+    con = open_staging(INCLUDE_TEXT_FIELDS)
 
     batches       = batches_for_year()
     total_batches = len(batches) * len(FISCAL_YEARS)
@@ -431,6 +432,11 @@ def main():
             print(f"\n[{done_batches}/{total_batches} | {pct:.0f}%] {label} FY={fy}")
             fetch_batch(con, extra_criteria, fy, label)
 
+    con.close()
+    print()
+    merge_staging(DB_PATH, STAGING_PATH)   # the only write to the main database
+
+    con = duckdb.connect(DB_PATH)
     row_count = con.execute(f"SELECT COUNT(*) FROM {TABLE_NAME}").fetchone()[0]
     fy_breakdown = con.execute(f"""
         SELECT fiscal_year, COUNT(*) as n,
@@ -448,6 +454,61 @@ def main():
     print(f"\nOpen {DB_PATH} in DBeaver.")
     con.close()
     return missing
+
+
+def quote(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def merge_sql(columns: list[str]) -> str:
+    cols = ", ".join(quote(c) for c in columns)
+    sets = ", ".join(f"{quote(c)} = EXCLUDED.{quote(c)}" for c in columns if c != "appl_id")
+    return (f"INSERT INTO {TABLE_NAME} ({cols}) SELECT {cols} FROM staging.{TABLE_NAME} "
+            f"ON CONFLICT (appl_id) DO UPDATE SET {sets}")
+
+
+def open_staging(include_text: bool):
+    """Create a fresh local staging file and record whether it holds text."""
+    con = duckdb.connect(str(STAGING_PATH))
+    con.execute(DDL)
+    con.execute(PROGRESS_DDL)
+    con.execute("CREATE TABLE _staging_info (include_text BOOLEAN)")
+    con.execute("INSERT INTO _staging_info VALUES (?)", [include_text])
+    return con
+
+
+def merge_staging(db_path, staging_path) -> int:
+    """Upsert everything in the staging file into the main database in one transaction,
+    then delete the staging file. If the merge fails, the main database is unchanged
+    and the staging file is kept, so the next run merges it without re-downloading."""
+    con = duckdb.connect(str(db_path))
+    try:
+        con.execute("ATTACH '" + str(staging_path).replace("'", "''") + "' AS staging (READ_ONLY)")
+        try:
+            include_text = con.execute("SELECT include_text FROM staging._staging_info").fetchone()[0]
+        except duckdb.CatalogException:
+            include_text = False   # unknown: leave existing text alone
+        columns = [r[0] for r in con.execute(
+            "SELECT column_name FROM duckdb_columns() WHERE database_name = 'staging' "
+            "AND table_name = ? ORDER BY column_index", [TABLE_NAME]).fetchall()]
+        if not include_text:
+            # NULL text in staging means "not requested", not "NIH removed it".
+            columns = [c for c in columns if c not in TEXT_COLUMNS]
+        rows = con.execute(f"SELECT COUNT(*) FROM staging.{TABLE_NAME}").fetchone()[0]
+        con.execute("BEGIN TRANSACTION")
+        try:
+            con.execute(merge_sql(columns))
+            con.execute("COMMIT")
+        except Exception:
+            con.execute("ROLLBACK")
+            raise
+        con.execute("DETACH staging")
+    finally:
+        con.close()
+    for path in (Path(staging_path), Path(str(staging_path) + ".wal")):
+        path.unlink(missing_ok=True)
+    print(f"Merged {rows:,} staged rows into {db_path}")
+    return rows
 
 
 def check_completeness(con) -> int:
