@@ -13,6 +13,7 @@ NIH award data from the [NIH RePORTER API](https://api.reporter.nih.gov), loaded
 | `award_text.py` | Shared upsert logic and the abstract / terms text fields |
 | `Tables/` | SQL that builds the normalized schema from `nih_awards_national` |
 | `table documentation.md` | Build order and rules for the normalized tables |
+| `DATA_DICTIONARY.md` | Every table and column: grain, keys, meaning, fill rates, codes, known gaps |
 | `Home.py`, `app.py`, `pages/` | Streamlit dashboard (Funding Cliff, Pipeline, Institutes, Universities) |
 | `duckdb scripts/`, `Practice SQL/` | Ad hoc analysis queries and SQL practice |
 | `tests/` | Tests for the text upsert logic |
