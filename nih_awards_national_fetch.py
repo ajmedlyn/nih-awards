@@ -4,8 +4,10 @@ NIH RePORTER — National Award Data Fetcher
 Pulls ALL NIH awards for FY2000-FY2026 (fixed history) into a separate DuckDB
 table. Newer years are handled by nih_awards_national_incremental_2026_fetch.py.
 
-Strategy: batch by state/territory to stay under the API's 14,999-record
-offset cap. Also fetches a catch-all batch for non-US / no-state records.
+Strategy: batch by state/territory to stay under the API's 15,000-record
+offset cap. Awards with no US state (intramural, interagency, some contracts,
+foreign) get their own batches. Ends with a completeness check against NIH's
+per-year totals.
 
 Rate limit: NIH asks for no more than 1 request/second. We use 1.1s delay.
 Recommended: run on weekends or weekdays 9 PM – 5 AM EST.
@@ -49,6 +51,11 @@ US_STATES = [
     "SD","TN","TX","UT","VT","VA","WA","WV","WI","WY",
     "DC","PR","GU","VI","AS","MP",
 ]
+
+# Awards with no US state never appear in the state batches. In FY2024 these were
+# 2,980 intramural, 104 interagency, 23 contract and 690 foreign awards.
+MECHANISM_BATCHES = ["IM", "IAA", "NSRDC"]   # intramural, interagency agreements, contracts
+OFFSET_CAP        = 15000                    # the API stops returning records past this offset
 
 BASE_FIELDS = [
     "ApplId","SubprojectId","FiscalYear","Organization","ProjectNum",
@@ -167,11 +174,11 @@ def flatten_record(r: dict) -> dict:
 
     org = r.get("organization") or {}
     flat["org_name"]    = org.get("org_name")
-    flat["org_city"]    = org.get("city")
+    flat["org_city"]    = org.get("org_city")
     flat["org_state"]   = org.get("org_state")
-    flat["org_country"] = org.get("country")
+    flat["org_country"] = org.get("org_country")
     flat["org_duns"]    = org.get("org_duns")
-    flat["org_uei"]     = org.get("uei")
+    flat["org_uei"]     = org.get("primary_uei")
     flat["dept_type"]   = org.get("dept_type")
 
     ot = r.get("organization_type") or {}
@@ -236,28 +243,102 @@ def mark_progress(con, key: str, total: int, fetched: int, completed: bool):
     """, [key, total, fetched, completed])
 
 
-# ── Fetch one batch (state + FY) ──────────────────────────────────────────────
+def batches_for_year() -> list[tuple[str, object]]:
+    """(label, extra criteria) for every batch in one fiscal year.
+    Criteria can be a function of the fiscal year, called only if the batch runs."""
+    batches  = [(state, {"org_states": [state]}) for state in US_STATES]
+    batches += [(mech, {"funding_mechanism": [mech]}) for mech in MECHANISM_BATCHES]
+    batches += [("FOREIGN", lambda fy: {"org_countries": foreign_countries(fy)})]
+    return batches
 
-def fetch_batch(con, state_or_none: str | None, fy: int, label: str):
+
+def api_total(criteria: dict) -> int:
+    resp = requests.post(API_URL, json={"criteria": criteria, "offset": 0, "limit": 1}, timeout=60)
+    resp.raise_for_status()
+    return resp.json().get("meta", {}).get("total", 0)
+
+
+def is_us(record: dict) -> bool:
+    return (record.get("organization") or {}).get("org_country") == "UNITED STATES"
+
+
+def post_search(payload: dict, label: str, fy: int) -> dict:
+    """POST one search page, retrying up to MAX_RETRIES times."""
+    failures = 0
+    while True:
+        try:
+            resp = requests.post(API_URL, json=payload, timeout=60)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            failures += 1
+            if failures >= MAX_RETRIES:
+                # Fail loudly: a nonzero exit stops refresh_and_normalize.py
+                # before it rebuilds tables from a half-refreshed source.
+                raise RuntimeError(
+                    f"Giving up on [{label} FY{fy}] offset {payload['offset']} after {failures} tries"
+                ) from e
+            print(f"  ERROR on [{label} FY{fy}] offset {payload['offset']}: {e} — retry {failures}/{MAX_RETRIES} in 5s")
+            time.sleep(5)
+
+
+def foreign_countries(fy: int) -> list[str]:
+    """Every non-US country with awards in fy.
+
+    The API has no "not US" filter, so sort the year by country and read from each
+    end until the first US award. Only the country names are kept: paging through a
+    sort with many ties can repeat or skip records, so the awards themselves are
+    fetched afterwards with an org_countries filter.
+    """
+    countries = set()
+    for order in ("asc", "desc"):
+        offset = 0
+        reached_us = False
+        while not reached_us and offset < OFFSET_CAP:
+            payload = {
+                "criteria":       {"fiscal_years": [fy]},
+                "include_fields": ["Organization"],
+                "offset":         offset,
+                "limit":          PAGE_SIZE,
+                "sort_field":     "organization.org_country",
+                "sort_order":     order,
+            }
+            results = post_search(payload, f"countries {order}", fy).get("results", [])
+            time.sleep(REQUEST_DELAY)
+            if not results:
+                break
+            for rec in results:
+                if is_us(rec):
+                    reached_us = True
+                    break
+                country = (rec.get("organization") or {}).get("org_country")
+                if country:
+                    countries.add(country)
+            offset += PAGE_SIZE
+    return sorted(countries)
+
+
+# ── Fetch one batch ───────────────────────────────────────────────────────────
+
+def fetch_batch(con, extra_criteria, fy: int, label: str):
     key = batch_key(label, fy)
 
     if RESUME and already_done(con, key):
         print(f"  [{label} FY{fy}] already complete — skipping")
         return
 
-    criteria: dict = {"fiscal_years": [fy]}
-    if state_or_none:
-        criteria["org_states"] = [state_or_none]
-    else:
-        # Catch-all: non-US awards (no state filter, exclude US states)
-        # NIH doesn't have a "not in" filter, so we use org_countries workaround
-        # — just query with no state filter and deduplicate via PRIMARY KEY
-        pass
+    if callable(extra_criteria):
+        extra_criteria = extra_criteria(fy)
+    if any(value == [] for value in extra_criteria.values()):
+        print(f"  [{label} FY{fy}] nothing to fetch")
+        mark_progress(con, key, 0, 0, True)
+        return
+
+    criteria: dict = {"fiscal_years": [fy], **extra_criteria}
 
     offset      = 0
     total_seen  = 0
     page_count  = 0
-    failures    = 0
 
     while True:
         payload = {
@@ -266,26 +347,18 @@ def fetch_batch(con, state_or_none: str | None, fy: int, label: str):
             "offset":         offset,
             "limit":          PAGE_SIZE,
         }
-
-        try:
-            resp = requests.post(API_URL, json=payload, timeout=60)
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception as e:
-            failures += 1
-            if failures >= MAX_RETRIES:
-                # Fail loudly rather than retry forever or mark the batch complete.
-                raise RuntimeError(
-                    f"Giving up on [{label} FY{fy}] offset {offset} after {failures} tries"
-                ) from e
-            print(f"  ERROR on [{label} FY{fy}] offset {offset}: {e} — retry {failures}/{MAX_RETRIES} in 5s")
-            time.sleep(5)
-            continue
-        failures = 0
+        data = post_search(payload, label, fy)
 
         total     = data.get("meta", {}).get("total", 0)
         results   = data.get("results", [])
         page_count += 1
+
+        if offset == 0 and total > OFFSET_CAP:
+            # Fail loudly: past the cap the API returns nothing, so the batch would be cut off.
+            raise RuntimeError(
+                f"[{label} FY{fy}] has {total:,} records, over the API's {OFFSET_CAP:,} cap; "
+                f"split this batch before fetching"
+            )
 
         if offset == 0 and total > 0:
             print(f"  [{label} FY{fy}] total: {total:,}", end="", flush=True)
@@ -330,22 +403,17 @@ def main():
     con.execute(DDL)
     con.execute(PROGRESS_DDL)
 
-    total_batches = len(US_STATES) * len(FISCAL_YEARS) + len(FISCAL_YEARS)
+    batches       = batches_for_year()
+    total_batches = len(batches) * len(FISCAL_YEARS)
     done_batches  = 0
 
     for fy in FISCAL_YEARS:
-        # US states + territories
-        for state in US_STATES:
+        # US states + territories, then the no-state and foreign batches
+        for label, extra_criteria in batches:
             done_batches += 1
             pct = 100 * done_batches / total_batches
-            print(f"\n[{done_batches}/{total_batches} | {pct:.0f}%] State={state} FY={fy}")
-            fetch_batch(con, state, fy, state)
-
-        # International / no-state catch-all
-        # (will upsert — duplicates handled by PRIMARY KEY)
-        done_batches += 1
-        print(f"\n[{done_batches}/{total_batches}] International catch-all FY={fy}")
-        fetch_batch(con, None, fy, "INTL")
+            print(f"\n[{done_batches}/{total_batches} | {pct:.0f}%] {label} FY={fy}")
+            fetch_batch(con, extra_criteria, fy, label)
 
     row_count = con.execute(f"SELECT COUNT(*) FROM {TABLE_NAME}").fetchone()[0]
     fy_breakdown = con.execute(f"""
@@ -358,8 +426,25 @@ def main():
     print(f"DONE. Total rows in {TABLE_NAME}: {row_count:,}")
     for fy, n, tc in fy_breakdown:
         print(f"  FY{fy}: {n:,} awards  |  ${tc:,.0f} total cost")
+    check_completeness(con)
     print(f"\nOpen {DB_PATH} in DBeaver.")
     con.close()
+
+
+def check_completeness(con):
+    """Compare each fiscal year's row count with NIH's total; a gap means some batch missed awards."""
+    print("\nCompleteness check (NIH total vs rows in table):")
+    for fy in FISCAL_YEARS:
+        try:
+            nih_total = api_total({"fiscal_years": [fy]})
+        except Exception as e:
+            print(f"  FY{fy}: could not reach NIH ({e})")
+            continue
+        have    = con.execute(f"SELECT COUNT(*) FROM {TABLE_NAME} WHERE fiscal_year = ?", [fy]).fetchone()[0]
+        missing = max(nih_total - have, 0)
+        flag    = "" if missing == 0 else "   <-- missing awards"
+        print(f"  FY{fy}: NIH {nih_total:,} | table {have:,} | missing {missing:,}{flag}")
+        time.sleep(REQUEST_DELAY)
 
 
 if __name__ == "__main__":

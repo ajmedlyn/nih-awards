@@ -58,6 +58,8 @@ python nih_awards_national_incremental_2026_fetch.py
 Add `--include-text` to also refresh abstracts, public-health text and terms.
 
 - Rows are upserted on `appl_id`: existing awards are updated, new ones inserted, nothing is deleted.
+- Each fiscal year is fetched in batches: one per US state/territory, one each for intramural (`IM`), interagency (`IAA`) and contract (`NSRDC`) awards, which have no state, and one for foreign awards. Any batch over the API's 15,000-record cap stops the run instead of being cut off.
+- Each run ends with a completeness check comparing the table's row count per fiscal year with NIH's total.
 - The fiscal year follows NIH's calendar (it starts October 1). The script re-pulls last fiscal year too, because NIH backfills fields such as spending categories after the year closes.
 - NIH asks for no more than 1 request per second; the script waits 1.1 seconds between requests. For large pulls, NIH also asks that you run between 9 PM and 5 AM Eastern.
 - DuckDB allows one writer. Close Streamlit and any open DuckDB sessions first.
