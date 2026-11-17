@@ -59,6 +59,12 @@ Known gap, accepted for MVP.
 
 Award fact table grain:
 One row per ApplicationID. Joins to organizations and projects.
+
+Subprojects and dollar totals:
+A parent award's amount already includes its subprojects, and each subproject
+also has its own row and amount. is_subproject (award_fact, award_ic_funding)
+flags those rows; filter NOT is_subproject for dollar totals or they come out
+about 10% high.
 IC_Code is the administering institute only. Use award_ic_funding to split
 dollars across co-funding institutes.
 

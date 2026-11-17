@@ -412,6 +412,7 @@ def main():
     print(f"Incremental refresh from FY{START_FISCAL_YEAR}; resume mode: {RESUME}")
     print("=" * 65)
 
+    db_config.require_existing_db(DB_PATH)   # never refresh a new, empty file
     con = duckdb.connect(DB_PATH)
     con.execute(DDL)
     con.execute(PROGRESS_DDL)
@@ -431,7 +432,9 @@ def main():
 
     row_count = con.execute(f"SELECT COUNT(*) FROM {TABLE_NAME}").fetchone()[0]
     fy_breakdown = con.execute(f"""
-        SELECT fiscal_year, COUNT(*) as n, SUM(award_amount) as total_cost
+        SELECT fiscal_year, COUNT(*) as n,
+               -- Subproject amounts are already inside their parent award's amount.
+               SUM(award_amount) FILTER (WHERE subproject_id IS NULL) as total_cost
         FROM {TABLE_NAME}
         GROUP BY fiscal_year ORDER BY fiscal_year
     """).fetchall()
@@ -439,7 +442,7 @@ def main():
     print("\n" + "=" * 65)
     print(f"DONE. Total rows in {TABLE_NAME}: {row_count:,}")
     for fy, n, tc in fy_breakdown:
-        print(f"  FY{fy}: {n:,} awards  |  ${tc:,.0f} total cost")
+        print(f"  FY{fy}: {n:,} rows  |  ${tc or 0:,.0f} total cost (main awards, all agencies)")
     check_completeness(con)
     print(f"\nOpen {DB_PATH} in DBeaver.")
     con.close()

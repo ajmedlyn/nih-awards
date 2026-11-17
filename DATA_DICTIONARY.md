@@ -6,6 +6,20 @@ Every object in the main DuckDB database (`nih_awards.duckdb`; `big_dawg.duckdb`
 - **Build order and design rules** (stable IDs, tie-breaking, known source issues) live in `table documentation.md`. This file describes *what the data means*; that one describes *how it is built*.
 - **Source:** NIH RePORTER API v2 (`https://api.reporter.nih.gov/v2/projects/search`). RePORTER covers NIH **and** other HHS/VA agencies — see `agency_code`.
 
+### Counting dollars: two filters almost every total needs
+
+1. **`SubProject_ID IS NULL`** (or `NOT is_subproject`). Multi-part awards (centers, program projects) have a parent row whose amount **already includes** its components, plus one row per component with its own amount. Summing every row counts that money twice: FY2023 NIH is $48.11B across all rows but **$43.65B** across main awards. This applies to `award_fact.TotalCosts`, `nih_awards_national.award_amount` and `award_ic_funding`.
+2. **`agency_code = 'NIH'`** when the question is about NIH. About 6% of rows are other agencies (see codes below).
+
+```sql
+SELECT Federal_Fiscal_Year, SUM(TotalCosts) AS nih_dollars
+FROM award_fact
+WHERE agency_code = 'NIH' AND NOT is_subproject
+GROUP BY 1 ORDER BY 1;
+```
+
+Counting *awards* (rows) is different: count main awards (`NOT is_subproject`) to count projects funded, or all rows to count components.
+
 ---
 
 ## Object map
@@ -63,7 +77,7 @@ award_fact.IC_Code      → nih_institutes.agency_ic_admin_code
 | HRSA | Health Resources and Services Administration | 1 |
 | NULL | — | 39 |
 
-**Application / award type (`appl_type_code`, `award_type`).** The leading digit of `project_num`.
+**Application / award type (`award_type`).** The leading part of `project_num`. Counts below are `award_type`. Prefer it over `appl_type_code`, which uses a plain `4` instead of `4C`/`4N` and is NULL on 3,225 rows where `award_type` is filled.
 
 | Code | Meaning | Rows |
 |---|---|---|
@@ -79,7 +93,7 @@ award_fact.IC_Code      → nih_institutes.agency_ic_admin_code
 
 **Funding mechanism (`mechanism_code_dc` → `funding_mechanism`).**
 
-| Code | Mechanism | Rows | Has a US state? |
+| Code | Mechanism | Rows | US awards have a state? |
 |---|---|---|---|
 | RP | Research projects (non-SBIR/STTR) | 1,223,894 | Yes |
 | RC | Research centers | 314,220 | Yes |
@@ -91,6 +105,10 @@ award_fact.IC_Code      → nih_institutes.agency_ic_admin_code
 | IAA | Interagency agreements | 2,804 | **No** — fetched by the `IAA` batch |
 | CO | Construction grants | 892 | Yes |
 | UK / OT / CP | Other | 58,513 / 11,333 / 1,088 | Yes |
+| CC | (unnamed) | 1 | — |
+| NULL | (no mechanism reported) | 2,796 | — |
+
+Foreign awards, of any mechanism, have no US state; the `FOREIGN` batch fetches them. Of the foreign rows with `org_country` filled, most are research projects (RP 12,496; UK 4,793; OR 2,746).
 
 ---
 
@@ -116,8 +134,8 @@ One row per NIH application (`appl_id`) as returned by RePORTER. An *application
 | `serial_num` | VARCHAR | 98.5% | Serial-number part of `project_num`. |
 | `support_year` | VARCHAR | 98.5% | Year of support, e.g. `03` = third year. Text, keeps leading zeros. |
 | `suffix_code` | VARCHAR | 98.5% | Suffix such as `S1` (supplement) or `A1` (amended application); empty string when none. |
-| `appl_type_code` | VARCHAR | 98.5% | Application type parsed out of `project_num`. See codes above. |
-| `award_type` | VARCHAR | 98.7% | Application type as reported by RePORTER. Same codes. |
+| `appl_type_code` | VARCHAR | 98.5% | Application type parsed out of `project_num`. Uses `4` for all extensions; NULL on 3,225 rows where `award_type` is filled. Prefer `award_type`. |
+| `award_type` | VARCHAR | 98.7% | Application type as reported by RePORTER, including `4C`/`4N`. See codes above. |
 | `mechanism_code_dc` | VARCHAR | 99.9% | Funding mechanism code. See codes above. |
 | `funding_mechanism` | VARCHAR | 99.9% | Funding mechanism name. |
 
@@ -125,7 +143,7 @@ One row per NIH application (`appl_id`) as returned by RePORTER. An *application
 
 | Column | Type | Filled | Description |
 |---|---|---|---|
-| `award_amount` | BIGINT | 96.8% | Total cost awarded (direct + indirect). Use for award totals. |
+| `award_amount` | BIGINT | 96.8% | Total cost awarded (direct + indirect). For totals, sum main awards only (`subproject_id IS NULL`); subproject amounts are already inside the parent's. |
 | `direct_cost_amt` | BIGINT | 92.0% | Direct costs. |
 | `indirect_cost_amt` | BIGINT | 84.4% | Indirect (facilities and administrative) costs. |
 | `agency_ic_fundings_json` | VARCHAR | 100% | JSON array, one entry per funding institute: `fy`, `code`, `name`, `total_cost`, `direct_cost_ic`, `indirect_cost_ic`. Normalized into `award_ic_funding`. Use that table for totals by institute. |
@@ -151,8 +169,8 @@ One row per NIH application (`appl_id`) as returned by RePORTER. An *application
 | `opportunity_number` | VARCHAR | 70.1% | Funding opportunity the application answered, e.g. `PAR-97-031`. |
 | `arra_funded` | VARCHAR | 91.4% | `Y`/`N`: funded by the 2009 Recovery Act. |
 | `covid_response` | VARCHAR | 0.2% | COVID-19 funding codes, e.g. `[Reg-CV]`. NULL for unrelated awards. |
-| `is_active` | BOOLEAN | 100% | RePORTER's "active project" flag as of the last fetch of this row. |
-| `is_new` | BOOLEAN | 100% | RePORTER's "new project" flag as of the last fetch of this row. |
+| `is_active` | BOOLEAN | 100% | RePORTER's "active project" flag **as of the last time this row was fetched**. For FY2000–2025 that was mostly the April 2026 history pull, so it is stale. For "currently active", use `Project_End_Date` instead. |
+| `is_new` | BOOLEAN | 100% | Meaning unverified. Only 138 rows are TRUE, all added since April 2026, and only 36 of those are type 1 (new). It is not "new award"; use `award_type = '1'` for that. Don't rely on it. |
 
 **Organization**
 
@@ -191,7 +209,7 @@ One row per NIH application (`appl_id`) as returned by RePORTER. An *application
 | `phr_text` | VARCHAR | 48.5% | Public health relevance statement: a short plain-language "why it matters". Not fetched by default. |
 | `terms` | VARCHAR | 84.5% | Every thesaurus synonym of the award's concepts, `<like><this>`. Large and redundant; not used downstream. |
 | `pref_terms` | VARCHAR | 84.4% | One preferred name per concept, semicolon-separated. |
-| `spending_categories_desc` | VARCHAR | 58.6% | NIH spending (RCDC) category names, semicolon-separated. Names can carry `*` markers, which the lookup strips. NULL until NIH assigns categories, roughly the year after the fiscal year closes. |
+| `spending_categories_desc` | VARCHAR | 58.6% | NIH spending (RCDC) category names, semicolon-separated. Names can end in `**`, almost entirely in FY2008 (42,512 rows); NIH doesn't document what it means, and the lookup strips it. One row (appl 7525763) lists some categories both with and without `**`, so its names and IDs don't pair up by position. NULL until NIH assigns categories, roughly the year after the fiscal year closes. |
 | `spending_categories_json` | VARCHAR | 100% | JSON array of category IDs, e.g. `[132]`, in the same order as the names. `{}` when there are none (886,526 rows). Normalized into `award_spending_categories`. |
 | `project_detail_url` | VARCHAR | 100% | Link to the award on RePORTER. |
 
@@ -206,18 +224,19 @@ One row per application; the main fact table. Every row of `nih_awards_national`
 | `ApplicationID` | BIGINT | 100% | `appl_id`. Primary key. |
 | `ORG_ID` | BIGINT | 99.9% | → `organizations.organization_id`. NULL (2,655 rows) when the source has neither org name nor DUNS. |
 | `SubProject_ID` | VARCHAR | 17.9% | `subproject_id`. |
+| `is_subproject` | BOOLEAN | 100% | TRUE for a component of a multi-part award. Its amounts are already counted in the parent; exclude it from dollar totals. |
 | `Core_Project_Number` | VARCHAR | 100% | `core_project_num`. |
 | `Project_ID` | BIGINT | 100% | → `projects.Project_ID`. NULL for 72 rows: no core project number, or a subproject whose parent has no main record. |
 | `project_num` | VARCHAR | 100% | `project_num`. |
 | `Indirects` | BIGINT | 84.4% | `indirect_cost_amt`. |
 | `Directs` | BIGINT | 92.0% | `direct_cost_amt`. |
-| `TotalCosts` | BIGINT | 96.8% | `award_amount`. Use this for award totals. |
+| `TotalCosts` | BIGINT | 96.8% | `award_amount`. For totals, filter `NOT is_subproject`. |
 | `project_title` | VARCHAR | 100% | `project_title`. |
 | `Federal_Fiscal_Year` | INTEGER | 100% | `fiscal_year`. |
 | `IC_Code` | VARCHAR | 100% | `agency_ic_admin_code`: the **administering** IC only. For dollars by institute use `award_ic_funding`. |
 | `org_type_code`, `org_type_name`, `dept_type` | VARCHAR | 95.0%, 100%, 60.3% | As in the source. |
 | `agency_code` | VARCHAR | 100% | As in the source. Filter `= 'NIH'` for NIH-only questions. |
-| `award_type`, `appl_type_code` | VARCHAR | 98.7%, 98.5% | As in the source. See codes above. |
+| `award_type`, `appl_type_code` | VARCHAR | 98.7%, 98.5% | As in the source. Prefer `award_type`. |
 | `award_notice_date` | DATE | 87.7% | Cast from source. |
 | `Budget_Start_Date`, `Budget_End_Date` | DATE | 93.9% | Cast from `budget_start`, `budget_end`. |
 | `Project_Start_Date`, `Project_End_Date` | DATE | 89.4%, 89.6% | Cast from `project_start_date`, `project_end_date`. |
@@ -257,7 +276,7 @@ One row per application per investigator, from `pis_json`. PIs without a `profil
 | `profile_id` | VARCHAR | 100% | NIH PI profile ID. → `investigators.profile_id`. |
 | `Last_Name`, `First_Name` | VARCHAR | 100% | Uppercased, as reported on this application. |
 | `Full_Name` | VARCHAR | 100% | `LAST, FIRST`. |
-| `is_contact_pi` | BOOLEAN | 100% | TRUE for the application's contact PI (exactly one per application). |
+| `is_contact_pi` | BOOLEAN | 100% | TRUE for the application's contact PI: one per application, except 3 applications with none. |
 
 ## `investigators`
 
@@ -271,11 +290,12 @@ One row per `profile_id`, with one display name: the name from the investigator'
 
 ## `award_ic_funding`
 
-One row per application per funding institute, from `agency_ic_fundings_json`. About 40K awards are co-funded, so **totals by institute should come from this table**, not `award_fact.IC_Code`.
+One row per application per funding institute, from `agency_ic_fundings_json`. About 40K awards are co-funded, so **totals by institute should come from this table**, not `award_fact.IC_Code`. Filter `NOT is_subproject`: subproject rows repeat money already in the parent's rows (about $4.45B in FY2023).
 
 | Column | Type | Filled | Description |
 |---|---|---|---|
 | `ApplicationID` | BIGINT | 100% | → `award_fact.ApplicationID`. |
+| `is_subproject` | BOOLEAN | 100% | TRUE for a subproject's row. Exclude from dollar totals. |
 | `IC_Code` | VARCHAR | 100% | Funding institute code. |
 | `Institute` | VARCHAR | 100% | Funding institute name. |
 | `Fiscal_Year` | INTEGER | 100% | Fiscal year of this institute's funding. |
@@ -353,10 +373,13 @@ Bookkeeping for the fetchers' resume mode. One row per batch, keyed `<label>_<fi
 
 | Gap | Effect | Status |
 |---|---|---|
-| ~1,600 awards still missing versus NIH's totals (FY2000: 356; FY2016–2022: 3–7 per year) | Totals slightly low | Small groups the batches don't cover yet; not investigated |
+| ~1,600 awards still missing versus NIH's totals (FY2000: 356; FY2016–2022: 3–7 per year; FY2023–2024: 29–40) | Totals slightly low | Not investigated. Possibly unsorted paging repeating or skipping records within a batch |
+| Completeness check compares NIH's total with **all** rows, including ones NIH has withdrawn | Withdrawn rows can hide the same number of missing ones (FY2026 shows "missing 0" with 35 extra rows) | Planned: a `last_fetched_at` column |
+| Batches are marked complete without comparing distinct IDs to NIH's total; state pages aren't sorted | A batch can skip records and still be marked done | Planned: sort by `appl_id`, check distinct count |
 | `org_city`, `org_country`, `org_uei` empty on rows fetched before 2026-11-16 | Can't filter by city/country on older rows | Fixed for new fetches; old rows need a full re-pull |
 | `project_serial_num` always empty | — | Field not requested; use `serial_num` |
 | ~6% of rows are non-NIH agencies | Inflates "NIH" totals unless filtered | Filter `agency_code = 'NIH'` |
+| Subproject amounts repeat money already in the parent award | Dollar totals ~10% high if not filtered | Filter `NOT is_subproject`; see "Counting dollars" |
 | 92 awards where `award_ic_funding` doesn't sum to `TotalCosts`; 45 with IC rows but NULL `TotalCosts` | Small institute/award mismatches | NIH source errors; documented in `table documentation.md` |
 | FY2026 spending categories not yet published | Category questions empty for FY2026 | Fills in as NIH assigns them; the incremental re-pulls the prior year |
 | Text missing for FY2000 and the 2026-11-16 leftover rows on the personal copy | `award_text` gaps for those rows | Backfill later if needed |

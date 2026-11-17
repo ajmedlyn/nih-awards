@@ -3,6 +3,7 @@
 CREATE OR REPLACE TABLE award_ic_funding AS
 SELECT 
 	nan.appl_id AS ApplicationID,
+	nan.subproject_id IS NOT NULL AS is_subproject,  -- amounts already counted in the parent; exclude from dollar totals
 	json_extract_string(ic.value, '$.code') AS IC_Code,
 	json_extract_string(ic.value, '$.name') AS Institute,
 	CAST(json_extract_string(ic.value, '$.fy') AS INTEGER) AS Fiscal_Year,

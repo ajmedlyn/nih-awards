@@ -93,7 +93,7 @@ def archive_text(db_path, output_dir, table="nih_awards_national", keep=5):
         for path in sorted(output_dir.glob("award-text-*.json")):
             if not SNAPSHOT.fullmatch(path.name):
                 continue
-            metadata = json.loads(path.read_text())
+            metadata = json.loads(path.read_text(encoding="utf-8"))
             if metadata.get("format") != FORMAT or metadata.get("source") != source:
                 raise ValueError("Archive directory belongs to another dataset: " + str(path))
             parquet = path.with_suffix(".parquet")

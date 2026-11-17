@@ -5,6 +5,7 @@ SELECT
    	aw.appl_id AS ApplicationID,
     o.organization_id AS ORG_ID,
     aw.subproject_id AS SubProject_ID,
+    aw.subproject_id IS NOT NULL AS is_subproject,  -- amounts already counted in the parent; exclude from dollar totals
     aw.core_project_num AS Core_Project_Number,
     p.Project_ID AS Project_ID,
     aw.project_num,
